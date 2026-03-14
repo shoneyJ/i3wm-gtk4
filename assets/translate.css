@@ -1,0 +1,141 @@
+window {
+    background-color: #1d2021;
+}
+
+.translate-main {
+    background-color: #1d2021;
+    padding: 8px;
+}
+
+.lang-row {
+    padding: 4px 0;
+}
+
+.lang-dropdown {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 4px 8px;
+    min-height: 28px;
+    font-size: 13px;
+}
+
+.swap-button {
+    background: none;
+    background-color: transparent;
+    color: #ebdbb2;
+    border: none;
+    padding: 4px 8px;
+    min-width: 0;
+    min-height: 28px;
+    font-size: 14px;
+}
+
+.swap-button:hover {
+    color: #ffffff;
+}
+
+.text-input {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 13px;
+    caret-color: #ebdbb2;
+}
+
+.text-input text {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+}
+
+.text-output {
+    background: none;
+    background-color: #282828;
+    color: #d5c4a1;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 13px;
+}
+
+.text-output text {
+    background: none;
+    background-color: #282828;
+    color: #d5c4a1;
+}
+
+.translate-button {
+    background: none;
+    background-color: #4c7899;
+    color: #ffffff;
+    border: 1px solid #4c7899;
+    border-radius: 4px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 32px;
+}
+
+.translate-button label {
+    color: #ffffff;
+}
+
+.translate-button:hover {
+    background: none;
+    background-color: #5a8aa9;
+}
+
+.translate-button:hover label {
+    color: #ffffff;
+}
+
+.translate-button:disabled {
+    background: none;
+    background-color: #3c3836;
+    color: #665c54;
+}
+
+.translate-button:disabled label {
+    color: #665c54;
+}
+
+.action-row {
+    padding: 4px 0 0 0;
+}
+
+.action-button {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 4px 12px;
+    min-height: 28px;
+    font-size: 12px;
+}
+
+.action-button:hover {
+    background: none;
+    background-color: #3c3836;
+    color: #ffffff;
+}
+
+scrolledwindow {
+    border-radius: 4px;
+}
+
+scrollbar slider {
+    background-color: #504945;
+    border-radius: 4px;
+    min-width: 6px;
+}
+
+scrollbar slider:hover {
+    background-color: #665c54;
+}

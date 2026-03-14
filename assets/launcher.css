@@ -1,0 +1,58 @@
+/* i3More Launcher — Gruvbox dark theme */
+
+window {
+    background-color: #1d2021;
+}
+
+.launcher-main {
+    background-color: #1d2021;
+    padding: 8px;
+}
+
+.launcher-search {
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 14px;
+    caret-color: #ebdbb2;
+    margin-bottom: 6px;
+}
+
+.launcher-search:focus {
+    border-color: #458588;
+}
+
+.launcher-list {
+    background-color: #1d2021;
+}
+
+.launcher-row {
+    padding: 6px 8px;
+    border-radius: 4px;
+    color: #ebdbb2;
+}
+
+row:selected .launcher-row {
+    background-color: #458588;
+}
+
+row:hover .launcher-row {
+    background-color: #3c3836;
+}
+
+row:selected:hover .launcher-row {
+    background-color: #458588;
+}
+
+.launcher-name {
+    color: #ebdbb2;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.launcher-desc {
+    color: #a89984;
+    font-size: 11px;
+}

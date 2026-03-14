@@ -1,0 +1,3 @@
+[submodule "gtk4-rs"]
+	path = gtk4-rs
+	url = git@github.com:gtk-rs/gtk4-rs.git

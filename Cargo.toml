@@ -1,0 +1,34 @@
+[package]
+name = "i3more"
+version = "0.1.0"
+edition = "2021"
+description = "An extension layer for i3 window manager with visual workspace navigation"
+
+[[bin]]
+name = "i3more"
+path = "src/main.rs"
+
+[[bin]]
+name = "i3more-translate"
+path = "src/translate_main.rs"
+
+[[bin]]
+name = "i3more-audio"
+path = "src/audio_main.rs"
+
+[[bin]]
+name = "i3more-launcher"
+path = "src/launcher_main.rs"
+
+[dependencies]
+gtk4 = "0.10"
+gdk4-x11 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+lru = "0.12"
+dirs = "6"
+zbus = "5"
+async-io = "2"
+futures-util = "0.3"
+log = "0.4"
+env_logger = "0.11"

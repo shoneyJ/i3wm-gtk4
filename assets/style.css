@@ -1,0 +1,146 @@
+window {
+    background-color: #1d2021;
+    opacity: 1;
+}
+
+.navigator {
+    background-color: #1d2021;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+}
+
+.workspace-entry {
+    padding: 2px 4px;
+    margin: 0;
+    border-radius: 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+.workspace-entry:hover {
+    background-color: #3c3836;
+}
+
+.workspace-entry.focused {
+    background-color: #4c7899;
+}
+
+.workspace-entry.urgent {
+    background-color: #cc241d;
+}
+
+.workspace-entry.visible {
+    background-color: #32302f;
+}
+
+.workspace-num {
+    color: #ebdbb2;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+}
+
+.workspace-entry.focused .workspace-num {
+    color: #ffffff;
+}
+
+.workspace-entry.urgent .workspace-num {
+    color: #ffffff;
+}
+
+.workspace-icon {
+    opacity: 0.85;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.tray-area {
+    padding: 0 4px 0 0;
+    margin: 0;
+    min-height: 0;
+}
+
+.tray-icon {
+    opacity: 0.9;
+    padding: 0 1px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.tray-icon:hover {
+    opacity: 1;
+}
+
+.sysinfo-area {
+    padding: 0 0 0 4px;
+    margin: 0;
+    min-height: 0;
+}
+
+.sysinfo-label {
+    color: #ebdbb2;
+    font-size: 9px;
+    padding: 0 4px;
+    margin: 0;
+    min-height: 0;
+}
+
+.sysinfo-icon {
+    opacity: 0.85;
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.sysinfo-icon:hover {
+    opacity: 1;
+}
+
+.sysinfo-popup-label {
+    font-size: 10px;
+    padding: 1px 0;
+}
+
+popover > contents {
+    background-color: #1d2021;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+.notification-bell {
+    opacity: 0.85;
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.notification-bell:hover {
+    opacity: 1;
+}
+
+.notification-bell-area {
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+}
+
+.notification-badge {
+    background-color: #cc241d;
+    color: #ffffff;
+    font-size: 7px;
+    font-weight: bold;
+    border-radius: 6px;
+    padding: 0 3px;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+}

@@ -1,0 +1,19 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - cargo-registry:/root/.cargo/registry
+      - cargo-target:/app/target
+      # Built binary lands here — directly on your host
+      - ./dist:/app/dist
+    command: bash
+    stdin_open: true
+    tty: true
+    working_dir: /app
+
+volumes:
+  cargo-registry:
+  cargo-target:

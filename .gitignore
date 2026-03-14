@@ -1,0 +1,22 @@
+# Rust build artifacts
+/target/
+
+# Compiled binaries
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Claude
+.claude/

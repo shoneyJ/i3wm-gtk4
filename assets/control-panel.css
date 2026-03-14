@@ -1,0 +1,211 @@
+/* Control Panel */
+.control-panel {
+    background: none;
+    background-color: #1d2021;
+    border: 1px solid #3c3836;
+}
+
+.control-panel-header {
+    padding: 4px 0;
+}
+
+.control-panel-title {
+    color: #ebdbb2;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+/* Control panel icon in the bar */
+.control-panel-icon {
+    opacity: 0.85;
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.control-panel-icon:hover {
+    opacity: 1;
+}
+
+/* Section cards */
+.cp-section {
+    background: none;
+    background-color: #282828;
+    border-radius: 6px;
+    padding: 4px;
+    margin: 0 4px;
+}
+
+.cp-section-header {
+    padding: 2px 0;
+}
+
+.cp-section-title {
+    color: #ebdbb2;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* Widget styles (moved from notification.css) */
+
+/* Section title for widgets */
+.widget-section-title {
+    color: #ebdbb2;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+/* Volume widget */
+.widget-volume {
+    background: none;
+    background-color: transparent;
+    border-radius: 4px;
+    padding: 6px;
+}
+
+.widget-volume-mute {
+    background: none;
+    background-color: transparent;
+    border: none;
+    padding: 0 4px;
+    min-width: 0;
+    min-height: 0;
+}
+
+.widget-volume-mute:hover {
+    background: none;
+    background-color: #3c3836;
+    border-radius: 4px;
+}
+
+.widget-volume-pct {
+    color: #d5c4a1;
+    font-size: 11px;
+}
+
+.widget-volume-scale trough {
+    background-color: #3c3836;
+    border-radius: 3px;
+    min-height: 6px;
+}
+
+.widget-volume-scale highlight {
+    background-color: #458588;
+    border-radius: 3px;
+    min-height: 6px;
+}
+
+.widget-volume-scale slider {
+    background-color: #ebdbb2;
+    border-radius: 50%;
+    min-width: 14px;
+    min-height: 14px;
+    margin: -4px;
+}
+
+/* Audio device dropdowns */
+.widget-audio-device-label {
+    color: #a89984;
+    font-size: 11px;
+}
+
+.widget-audio-device {
+    min-width: 0;
+}
+
+.widget-audio-device button {
+    background: none;
+    background-color: #3c3836;
+    color: #d5c4a1;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 6px;
+    min-height: 20px;
+    min-width: 0;
+    font-size: 11px;
+}
+
+.widget-audio-device button label {
+    min-width: 0;
+}
+
+.widget-audio-device button:hover {
+    background: none;
+    background-color: #504945;
+}
+
+/* Backlight widget */
+.widget-backlight {
+    background: none;
+    background-color: transparent;
+    border-radius: 4px;
+    padding: 6px;
+}
+
+.widget-backlight-scale trough {
+    background-color: #3c3836;
+    border-radius: 3px;
+    min-height: 6px;
+}
+
+.widget-backlight-scale highlight {
+    background-color: #d79921;
+    border-radius: 3px;
+    min-height: 6px;
+}
+
+.widget-backlight-scale slider {
+    background-color: #ebdbb2;
+    border-radius: 50%;
+    min-width: 14px;
+    min-height: 14px;
+    margin: -4px;
+}
+
+/* Background widget */
+.widget-background {
+    background: none;
+    background-color: transparent;
+    border-radius: 4px;
+    padding: 6px;
+}
+
+.widget-background-preview {
+    border-radius: 4px;
+    border: 1px solid #3c3836;
+    margin-top: 4px;
+}
+
+.widget-background-grid {
+    background: none;
+}
+
+.widget-background-thumb {
+    border-radius: 4px;
+    border: 2px solid transparent;
+}
+
+.widget-background-thumb:hover {
+    border-color: #458588;
+}
+
+.widget-background-thumb-active {
+    border-color: #b8bb26;
+}
+
+.widget-background-mode button {
+    background: none;
+    background-color: #3c3836;
+    color: #d5c4a1;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 6px;
+    min-height: 20px;
+    font-size: 11px;
+}
+
+.widget-background-mode button:hover {
+    background: none;
+    background-color: #504945;
+}
