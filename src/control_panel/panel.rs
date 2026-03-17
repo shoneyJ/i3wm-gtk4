@@ -127,7 +127,7 @@ impl ControlPanel {
             window.connect_notify_local(Some("is-active"), move |w, _| {
                 if w.is_active() {
                     if let Some(source) = timer.borrow_mut().take() {
-                        source.remove();
+                        crate::safe_source_remove(source);
                     }
                 } else {
                     let win_inner = win.clone();

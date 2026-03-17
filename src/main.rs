@@ -28,6 +28,14 @@ enum I3Event {
     WorkspacesChanged,
 }
 
+/// Safely remove a GLib source without panicking if it was already removed.
+/// Unlike `SourceId::remove()`, this does not panic on stale source IDs.
+pub(crate) fn safe_source_remove(source_id: glib::SourceId) {
+    unsafe {
+        glib::ffi::g_source_remove(source_id.as_raw());
+    }
+}
+
 fn main() {
     i3more::init_logging("i3more");
 
@@ -163,9 +171,10 @@ fn on_activate(app: &gtk4::Application) {
         }
 
         if has_event {
-            // Cancel any pending debounce timeout
+            log::debug!("Received i3 workspace/window event");
+            // Cancel any pending debounce timeout (safe: ignore if already fired)
             if let Some(source_id) = debounce_clone.borrow_mut().take() {
-                source_id.remove();
+                safe_source_remove(source_id);
             }
 
             // Schedule debounced update (100ms)
@@ -213,8 +222,9 @@ fn on_activate(app: &gtk4::Application) {
         }
 
         if tray_changed {
+            // Cancel any pending tray debounce (safe: ignore if already fired)
             if let Some(source_id) = tray_debounce_clone.borrow_mut().take() {
-                source_id.remove();
+                safe_source_remove(source_id);
             }
             let ts = tray_state_clone.clone();
             let tb = tray_box_clone.clone();
@@ -341,7 +351,7 @@ fn start_event_listener(tx: mpsc::Sender<I3Event>) {
 
 /// Connect to i3, subscribe to events, and forward them.
 fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut conn = ipc::I3Connection::connect()?;
+    let mut conn = ipc::I3Connection::connect_for_events()?;
     conn.subscribe(&["workspace", "window"])?;
     log::info!("Subscribed to i3 workspace and window events");
 
@@ -349,7 +359,8 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
         let (_event_type, _payload) = conn.read_event()?;
         // We don't need to parse the event details — just signal that something changed
         if tx.send(I3Event::WorkspacesChanged).is_err() {
-            break; // Receiver dropped, GTK app is shutting down
+            log::warn!("Event channel closed, GTK app shutting down");
+            break;
         }
     }
 

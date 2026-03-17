@@ -283,13 +283,17 @@ fn create_icon_widget(icon_result: &IconResult) -> gtk4::Image {
 
 /// Send an i3 command to switch to a workspace.
 fn switch_workspace(num: i64) {
+    log::info!("Switching to workspace {}", num);
     // Run in a background thread to avoid blocking GTK
-    glib::spawn_future_local(async move {
-        let _ = std::thread::spawn(move || {
-            if let Ok(mut conn) = crate::ipc::I3Connection::connect() {
-                let _ = conn.run_command(&format!("workspace number {}", num));
+    std::thread::spawn(move || {
+        match crate::ipc::I3Connection::connect() {
+            Ok(mut conn) => {
+                match conn.run_command(&format!("workspace number {}", num)) {
+                    Ok(_) => log::debug!("Workspace switch to {} succeeded", num),
+                    Err(e) => log::error!("Workspace switch command failed: {}", e),
+                }
             }
-        })
-        .join();
+            Err(e) => log::error!("Failed to connect to i3 for workspace switch: {}", e),
+        }
     });
 }

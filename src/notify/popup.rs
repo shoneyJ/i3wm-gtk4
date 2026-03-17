@@ -156,7 +156,7 @@ fn dismiss_popup(popups: &Rc<RefCell<Vec<PopupEntry>>>, id: u32) {
     if let Some(idx) = popups.iter().position(|p| p.id == id) {
         let entry = popups.remove(idx);
         if let Some(source) = entry.timeout_source {
-            source.remove();
+            crate::safe_source_remove(source);
         }
         entry.window.close();
     }

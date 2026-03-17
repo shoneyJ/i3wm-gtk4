@@ -1,3 +1,6 @@
 [submodule "gtk4-rs"]
 	path = gtk4-rs
 	url = git@github.com:gtk-rs/gtk4-rs.git
+[submodule "vendor/i3"]
+	path = vendor/i3
+	url = git@github.com:i3/i3.git

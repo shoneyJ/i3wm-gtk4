@@ -107,7 +107,7 @@ impl NotificationPanel {
                 if w.is_active() {
                     // Focus returned — cancel pending hide
                     if let Some(source) = timer.borrow_mut().take() {
-                        source.remove();
+                        crate::safe_source_remove(source);
                     }
                 } else {
                     // Focus lost — start 5s auto-hide timer

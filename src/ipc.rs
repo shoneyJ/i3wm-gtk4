@@ -25,11 +25,25 @@ pub struct I3Connection {
 }
 
 impl I3Connection {
-    /// Connect to the i3 IPC socket.
+    /// Connect to the i3 IPC socket with a 5-second read/write timeout.
     /// Tries I3SOCK env var first, then `i3 --get-socketpath`.
     pub fn connect() -> Result<Self, Box<dyn std::error::Error>> {
         let socket_path = get_socket_path()?;
         let stream = UnixStream::connect(&socket_path)?;
+        // Set timeouts so reads/writes don't block forever (e.g. after suspend)
+        let timeout = Some(std::time::Duration::from_secs(5));
+        stream.set_read_timeout(timeout)?;
+        stream.set_write_timeout(timeout)?;
+        Ok(Self { stream })
+    }
+
+    /// Connect without read timeout — for the event subscription stream
+    /// which legitimately blocks waiting for events. Write timeout is still set.
+    pub fn connect_for_events() -> Result<Self, Box<dyn std::error::Error>> {
+        let socket_path = get_socket_path()?;
+        let stream = UnixStream::connect(&socket_path)?;
+        stream.set_read_timeout(None)?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
         Ok(Self { stream })
     }
 

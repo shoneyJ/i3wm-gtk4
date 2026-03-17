@@ -237,7 +237,7 @@ pub fn build_stats_popover(icon: &impl gtk4::prelude::IsA<gtk4::Widget>) -> gtk4
         } else {
             // Stop polling
             if let Some(sid) = timer_id_clone.borrow_mut().take() {
-                sid.remove();
+                crate::safe_source_remove(sid);
             }
         }
     });
