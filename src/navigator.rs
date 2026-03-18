@@ -65,7 +65,7 @@ pub fn build_navigator(
     // Notification bell icon (right side, after tray icons)
     let bell_label = gtk4::Label::new(None);
     bell_label.set_use_markup(true);
-    bell_label.set_markup(&crate::fa::fa_icon(crate::fa::BELL, "#a89984", 10));
+    bell_label.set_markup(&crate::fa::fa_icon(crate::fa::BELL, "#a89984", 11));
     bell_label.add_css_class("notification-bell");
     bell_label.set_valign(gtk4::Align::Center);
 
@@ -94,7 +94,7 @@ pub fn build_navigator(
     if let Some((cap, status)) = crate::sysinfo::read_battery() {
         let charging = status == "Charging";
         let glyph = crate::fa::battery_glyph(cap, charging);
-        let icon_markup = crate::fa::fa_icon(glyph, "#a89984", 9);
+        let icon_markup = crate::fa::fa_icon(glyph, "#a89984", 11);
         battery_label.set_markup(&format!("{} {}%", icon_markup, cap));
     }
     // Only add battery label if a battery exists
@@ -111,7 +111,7 @@ pub fn build_navigator(
     // System stats icon with hover popover (FA gauge glyph)
     let stats_icon = gtk4::Label::new(None);
     stats_icon.set_use_markup(true);
-    stats_icon.set_markup(&crate::fa::fa_icon(crate::fa::GAUGE, "#a89984", 10));
+    stats_icon.set_markup(&crate::fa::fa_icon(crate::fa::GAUGE, "#a89984", 11));
     stats_icon.add_css_class("sysinfo-icon");
     stats_icon.set_valign(gtk4::Align::Center);
     sysinfo_box.append(&stats_icon);
@@ -132,7 +132,7 @@ pub fn build_navigator(
     // Control panel (sliders) icon
     let cp_label = gtk4::Label::new(None);
     cp_label.set_use_markup(true);
-    cp_label.set_markup(&crate::fa::fa_icon(crate::fa::SLIDERS, "#a89984", 10));
+    cp_label.set_markup(&crate::fa::fa_icon(crate::fa::SLIDERS, "#a89984", 11));
     cp_label.add_css_class("control-panel-icon");
     cp_label.set_valign(gtk4::Align::Center);
 

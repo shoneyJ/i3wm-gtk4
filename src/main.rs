@@ -278,7 +278,7 @@ fn on_activate(app: &gtk4::Application) {
         if let Some((cap, status)) = sysinfo::read_battery() {
             let charging = status == "Charging";
             let glyph = fa::battery_glyph(cap, charging);
-            let icon_markup = fa::fa_icon(glyph, "#a89984", 9);
+            let icon_markup = fa::fa_icon(glyph, "#a89984", 11);
             battery_label.set_markup(&format!("{} {}%", icon_markup, cap));
         }
         glib::ControlFlow::Continue
