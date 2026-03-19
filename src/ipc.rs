@@ -14,6 +14,7 @@ const HEADER_LEN: usize = 6 + 4 + 4; // magic + length + type
 pub const MSG_RUN_COMMAND: u32 = 0;
 pub const MSG_GET_WORKSPACES: u32 = 1;
 pub const MSG_SUBSCRIBE: u32 = 2;
+pub const MSG_GET_OUTPUTS: u32 = 3;
 pub const MSG_GET_TREE: u32 = 4;
 
 // Event types (response type has bit 31 set)
@@ -88,6 +89,11 @@ impl I3Connection {
     /// Get the list of workspaces with metadata.
     pub fn get_workspaces(&mut self) -> Result<Value, Box<dyn std::error::Error>> {
         self.send_and_recv(MSG_GET_WORKSPACES, b"")
+    }
+
+    /// Get the list of outputs (monitors) with geometry.
+    pub fn get_outputs(&mut self) -> Result<Value, Box<dyn std::error::Error>> {
+        self.send_and_recv(MSG_GET_OUTPUTS, b"")
     }
 
     /// Get the full window tree.

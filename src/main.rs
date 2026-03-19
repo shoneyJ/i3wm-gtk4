@@ -9,6 +9,7 @@ mod ipc;
 mod model;
 mod navigator;
 mod notify;
+mod sequencer;
 mod sysinfo;
 mod tray;
 
@@ -26,6 +27,7 @@ use tray::types::{TrayEvent, TrayItemId, TrayItemProps};
 /// Message sent from the i3 event listener thread to the GTK main thread.
 enum I3Event {
     WorkspacesChanged,
+    WorkspaceStructural, // "empty" or "init" — triggers renumbering
 }
 
 /// Safely remove a GLib source without panicking if it was already removed.
@@ -50,8 +52,15 @@ fn main() {
 fn on_activate(app: &gtk4::Application) {
     fa::register_font();
 
+    // Sequencer: fix any gaps in workspace numbering at startup
+    match sequencer::renumber_workspaces() {
+        Ok(true) => log::info!("Startup: workspace numbers re-sequenced"),
+        Ok(false) => log::debug!("Startup: workspace numbers already sequential"),
+        Err(e) => log::warn!("Startup sequencer failed: {}", e),
+    }
+
     // Initial i3 state query
-    let (workspaces_json, tree_json) = match query_initial_state() {
+    let (workspaces_json, tree_json, output_order) = match query_initial_state() {
         Ok(data) => data,
         Err(e) => {
             log::error!("Failed to connect to i3: {}", e);
@@ -61,7 +70,7 @@ fn on_activate(app: &gtk4::Application) {
         }
     };
 
-    let workspaces = model::build_workspace_state(&workspaces_json, &tree_json);
+    let workspaces = model::build_workspace_state(&workspaces_json, &tree_json, &output_order);
 
     // Collect all unique window classes for batch icon resolution
     let all_classes: Vec<String> = workspaces
@@ -166,12 +175,16 @@ fn on_activate(app: &gtk4::Application) {
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         // Drain all pending i3 events
         let mut has_event = false;
-        while rx.try_recv().is_ok() {
+        let mut has_structural = false;
+        while let Ok(evt) = rx.try_recv() {
             has_event = true;
+            if matches!(evt, I3Event::WorkspaceStructural) {
+                has_structural = true;
+            }
         }
 
         if has_event {
-            log::debug!("Received i3 workspace/window event");
+            log::debug!("Received i3 event (structural={})", has_structural);
             // Cancel any pending debounce timeout (safe: ignore if already fired)
             if let Some(source_id) = debounce_clone.borrow_mut().take() {
                 safe_source_remove(source_id);
@@ -187,6 +200,17 @@ fn on_activate(app: &gtk4::Application) {
                     // Clear the stored SourceId before it becomes stale
                     debounce_clear.borrow_mut().take();
                     refresh_state(&state_inner, &container_inner);
+                    // Renumber workspaces if a structural event occurred
+                    if has_structural {
+                        match sequencer::renumber_workspaces() {
+                            Ok(true) => {
+                                // Renames happened — refresh again to show new numbers
+                                refresh_state(&state_inner, &container_inner);
+                            }
+                            Ok(false) => {} // already sequential
+                            Err(e) => log::error!("Sequencer error: {}", e),
+                        }
+                    }
                 },
             );
             *debounce_clone.borrow_mut() = Some(source_id);
@@ -326,12 +350,14 @@ fn on_activate(app: &gtk4::Application) {
     window.present();
 }
 
-/// Query initial workspace and tree state from i3.
-fn query_initial_state() -> Result<(serde_json::Value, serde_json::Value), Box<dyn std::error::Error>> {
+/// Query initial workspace, tree, and output state from i3.
+fn query_initial_state() -> Result<(serde_json::Value, serde_json::Value, Vec<String>), Box<dyn std::error::Error>> {
     let mut conn = ipc::I3Connection::connect()?;
     let workspaces = conn.get_workspaces()?;
     let tree = conn.get_tree()?;
-    Ok((workspaces, tree))
+    let outputs = conn.get_outputs()?;
+    let output_order = sequencer::get_output_spatial_order(&outputs);
+    Ok((workspaces, tree, output_order))
 }
 
 /// Start a background thread that listens for i3 workspace and window events.
@@ -350,15 +376,34 @@ fn start_event_listener(tx: mpsc::Sender<I3Event>) {
 }
 
 /// Connect to i3, subscribe to events, and forward them.
+/// Parses workspace event types to distinguish structural changes (empty/init)
+/// from regular changes (focus). Skips "rename" events to prevent loops.
 fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = ipc::I3Connection::connect_for_events()?;
     conn.subscribe(&["workspace", "window"])?;
     log::info!("Subscribed to i3 workspace and window events");
 
     loop {
-        let (_event_type, _payload) = conn.read_event()?;
-        // We don't need to parse the event details — just signal that something changed
-        if tx.send(I3Event::WorkspacesChanged).is_err() {
+        let (event_type, payload) = conn.read_event()?;
+
+        let event = if event_type == ipc::EVENT_WORKSPACE {
+            let change = payload["change"].as_str().unwrap_or("");
+            match change {
+                "empty" | "init" => {
+                    log::info!("Workspace structural event: {}", change);
+                    I3Event::WorkspaceStructural
+                }
+                "rename" => {
+                    log::debug!("Skipping workspace rename event (sequencer-generated)");
+                    continue;
+                }
+                _ => I3Event::WorkspacesChanged,
+            }
+        } else {
+            I3Event::WorkspacesChanged
+        };
+
+        if tx.send(event).is_err() {
             log::warn!("Event channel closed, GTK app shutting down");
             break;
         }
@@ -374,7 +419,7 @@ fn refresh_state(
 ) {
     // Query fresh state from i3 (in a way that doesn't block too long)
     let fresh = match query_initial_state() {
-        Ok((ws, tree)) => model::build_workspace_state(&ws, &tree),
+        Ok((ws, tree, output_order)) => model::build_workspace_state(&ws, &tree, &output_order),
         Err(e) => {
             log::error!("Failed to refresh i3 state: {}", e);
             return;

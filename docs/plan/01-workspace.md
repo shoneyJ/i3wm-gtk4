@@ -52,3 +52,12 @@ ls ~/dotfiles/i3/.config/i3/*
 - Workspace from all the monitors are shown in center of the bar.
 - User is not able to identify which workspace belongs to which monitor.
 - A suggestion from user is to seperate them with a | , suggest a solution for this issue.
+
+### Workspace number sequencing
+
+- The number of workspace should always be sequencial.
+- If there are workspaces such as 1 2 3 4 5 and user closes workspace 3. Then the workspace number should shift and remaining should be 1 2 3 4.
+- the workspace number on right monitor should always be bigger than left monitors.
+- In the current open workspaces after the fix it should be 1 2 3 4 5 | 6.
+- polling is not recomended, check whether i3 provides any workspace close subscription.
+- refer to vendor/i3 to plan correctly.

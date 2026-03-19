@@ -15,9 +15,11 @@ pub struct WorkspaceInfo {
 }
 
 /// Build a complete workspace state by combining `get_workspaces` and `get_tree` data.
+/// `output_order` provides spatially-sorted output names (left-to-right) for correct grouping.
 pub fn build_workspace_state(
     workspaces_json: &Value,
     tree_json: &Value,
+    output_order: &[String],
 ) -> Vec<WorkspaceInfo> {
     // Extract per-workspace window classes from the tree
     let class_map = extract_workspace_classes(tree_json);
@@ -43,9 +45,13 @@ pub fn build_workspace_state(
         })
         .collect();
 
-    // Sort by output (monitor) first, then by workspace number within each output.
-    // This groups workspaces by monitor for the separator logic in the navigator.
-    result.sort_by(|a, b| a.output.cmp(&b.output).then(a.num.cmp(&b.num)));
+    // Sort by spatial output position (left-to-right), then by workspace number.
+    // This groups workspaces by physical monitor position for the separator logic.
+    result.sort_by(|a, b| {
+        let a_pos = output_order.iter().position(|o| o == &a.output).unwrap_or(usize::MAX);
+        let b_pos = output_order.iter().position(|o| o == &b.output).unwrap_or(usize::MAX);
+        a_pos.cmp(&b_pos).then(a.num.cmp(&b.num))
+    });
     result
 }
 
