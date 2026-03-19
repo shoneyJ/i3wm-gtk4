@@ -44,3 +44,11 @@ ls ~/dotfiles/i3/.config/i3/*
 
 - the central workspace navigator is perfect. with number above and icon below.
 - The left side info widget's text needs to be adjusted accordimgly.
+
+### Multiple Monitor
+
+- The user uses multiple monitors.
+- The monitors are managed be ArandR screen settings.
+- Workspace from all the monitors are shown in center of the bar.
+- User is not able to identify which workspace belongs to which monitor.
+- A suggestion from user is to seperate them with a | , suggest a solution for this issue.

@@ -43,7 +43,9 @@ pub fn build_workspace_state(
         })
         .collect();
 
-    result.sort_by_key(|ws| ws.num);
+    // Sort by output (monitor) first, then by workspace number within each output.
+    // This groups workspaces by monitor for the separator logic in the navigator.
+    result.sort_by(|a, b| a.output.cmp(&b.output).then(a.num.cmp(&b.num)));
     result
 }
 

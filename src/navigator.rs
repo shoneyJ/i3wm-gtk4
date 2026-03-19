@@ -192,6 +192,7 @@ pub fn build_navigator(
 }
 
 /// Re-render all workspace entries in the container.
+/// Workspaces are grouped by output (monitor) with a separator between groups.
 pub fn render_workspaces(
     container: &gtk4::Box,
     state: &Rc<RefCell<NavigatorState>>,
@@ -203,7 +204,18 @@ pub fn render_workspaces(
 
     let workspaces = state.borrow().workspaces.clone();
 
+    let mut prev_output: Option<&str> = None;
     for ws in &workspaces {
+        // Insert separator when the output (monitor) changes
+        if let Some(prev) = prev_output {
+            if prev != ws.output {
+                let sep = gtk4::Separator::new(gtk4::Orientation::Vertical);
+                sep.add_css_class("workspace-separator");
+                container.append(&sep);
+            }
+        }
+        prev_output = Some(&ws.output);
+
         let entry = build_workspace_entry(ws, state);
         container.append(&entry);
     }
