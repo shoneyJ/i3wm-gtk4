@@ -1,0 +1,52 @@
+.lock-screen {
+    background-color: #1d2021;
+}
+
+.lock-clock {
+    font-size: 64px;
+    font-weight: 300;
+    color: #ebdbb2;
+    margin-top: 12px;
+}
+
+.lock-date {
+    font-size: 18px;
+    color: #a89984;
+    margin-top: 4px;
+}
+
+.lock-username {
+    font-size: 18px;
+    color: #a89984;
+    margin-bottom: 16px;
+}
+
+.lock-password-box {
+    background-color: #282828;
+    border: 1px solid #504945;
+    border-radius: 6px;
+    padding: 8px 16px;
+    min-width: 240px;
+    min-height: 36px;
+}
+
+.lock-dots {
+    font-size: 20px;
+    color: #ebdbb2;
+    letter-spacing: 4px;
+}
+
+.lock-status {
+    font-size: 14px;
+    color: #a89984;
+    min-height: 24px;
+}
+
+.lock-status.error {
+    color: #fb4934;
+}
+
+.lock-avatar {
+    border-radius: 48px;
+    margin-bottom: 8px;
+}
