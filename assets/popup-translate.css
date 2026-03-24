@@ -1,0 +1,24 @@
+.popup-translate {
+    background: none;
+    background-color: #282828;
+    border: 1px solid #3c3836;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+
+.popup-lang {
+    color: #665c54;
+    font-size: 10px;
+    margin-bottom: 2px;
+}
+
+.popup-text {
+    color: #ebdbb2;
+    font-size: 13px;
+}
+
+.popup-loading {
+    color: #a89984;
+    font-size: 12px;
+    font-style: italic;
+}

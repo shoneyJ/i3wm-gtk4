@@ -140,3 +140,14 @@ We use docker to build the project
 killall i3more-translate 2>/dev/null; docker compose run --rm dev bash -c "cargo build --release && cp target/release/i3more target/release/i3more-translate dist/i3More-translate"
 
 ```
+
+## UI
+
+- ~~currently user copies the text and then opens the translator app for the copied text to be translated. Along with it, if user only selects a text and opens the translator. The selected text should be translated.~~
+- **Done**: `auto_paste_and_translate` now checks X11 primary selection (`display.primary_clipboard()`) first, then falls back to the regular clipboard. Selected text is auto-populated and translated on open.
+
+### popup-translation
+
+- When user selects a text on a window, then with a shortcut key, a popup opens right above where the selection ended.
+  The popup should show a translated text.
+- search gtk4 submodule for this feature implementation.

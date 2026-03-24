@@ -333,6 +333,22 @@ fn auto_paste_and_translate(
     source_dd: &gtk4::DropDown,
     target_dd: &gtk4::DropDown,
 ) {
+    // Try X11 primary selection first (highlighted text) via xclip
+    let primary_text = std::process::Command::new("xclip")
+        .args(["-selection", "primary", "-o"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .filter(|s| !s.trim().is_empty());
+
+    if let Some(text) = primary_text {
+        source_buf.set_text(&text);
+        trigger_translate(source_buf, output_buf, translate_btn, languages, source_dd, target_dd);
+        return;
+    }
+
+    // Fall back to clipboard (copied text)
     let display = match gdk::Display::default() {
         Some(d) => d,
         None => return,
