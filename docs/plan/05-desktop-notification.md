@@ -456,3 +456,11 @@ on notifications, and keyboard shortcuts for panel navigation.
 
 - ~~The long audio input and output dropdown spans the notification window across another window.~~ **Fixed** — dropdown labels ellipsized at 30 chars via custom `ListItemFactory`, panel width enforced with `set_size_request`, container overflow hidden.
 - ~~The entire notification window should stay in the same monitor window~~ **Fixed** — same fix; panel constrained to `PANEL_WIDTH` (380px).
+
+### focus-me-not
+
+- ~~When a notification window pop up, then the focus is set to the notification window.~~ **Fixed** — `connect_realize` handler in `popup.rs` sets `_NET_WM_WINDOW_TYPE_NOTIFICATION` (i3 auto-floats) and `_NET_WM_USER_TIME=0` (i3 skips focus per `manage.c:640-642`) via `xprop` before window maps. Same pattern as navigator dock window in `main.rs:318-352`.
+
+### system-notify-stay
+
+- ~~When user uses keyboard to change volumne or brightness, popup opens and closes again.~~ **Fixed** — `show()` refactored into update-or-create pattern. When `replaces_id` matches an existing popup, `update_existing()` replaces the window's child widget and resets the timeout timer in-place — no window destroy/recreate cycle. New popups still go through `create_new()` with full X11 property setup.

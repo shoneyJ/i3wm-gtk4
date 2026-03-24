@@ -59,11 +59,69 @@ impl PopupManager {
         }
     }
 
-    /// Show a notification popup. If a popup with the same ID exists, replace it.
+    /// Show a notification popup. If a popup with the same ID exists, update it
+    /// in-place (no window destroy/recreate). Otherwise create a new popup.
     pub fn show(&self, notif: &Notification) {
-        // Remove existing popup with same ID (for replaces_id)
-        self.dismiss(notif.id);
+        let existing_idx = {
+            let popups = self.popups.borrow();
+            popups.iter().position(|p| p.id == notif.id)
+        };
 
+        if let Some(idx) = existing_idx {
+            self.update_existing(idx, notif);
+        } else {
+            self.create_new(notif);
+        }
+    }
+
+    /// Update an existing popup's content and reset its timeout timer.
+    fn update_existing(&self, idx: usize, notif: &Notification) {
+        let mut popups = self.popups.borrow_mut();
+        let entry = &mut popups[idx];
+
+        // Cancel the old timeout
+        if let Some(source) = entry.timeout_source.take() {
+            crate::safe_source_remove(source);
+        }
+
+        // Build new content widget
+        let widget = render::build_notification_widget(notif, Some(self.action_tx.clone()));
+
+        // Close button
+        let close_btn = gtk4::Button::with_label("\u{00d7}"); // ×
+        close_btn.add_css_class("notification-close");
+        close_btn.set_valign(gtk4::Align::Start);
+        let popups_ref = self.popups.clone();
+        let notif_id = notif.id;
+        let close_tx = self.close_tx.clone();
+        close_btn.connect_clicked(move |_| {
+            let _ = close_tx.send(NotifyEvent::Close(notif_id));
+            dismiss_popup(&popups_ref, notif_id);
+        });
+        widget.append(&close_btn);
+
+        // Replace the window's child content (no window destroy/recreate)
+        entry.window.set_child(Some(&widget));
+
+        // Start fresh timeout
+        let timeout_ms = if notif.expire_timeout <= 0 {
+            DEFAULT_TIMEOUT_MS
+        } else {
+            notif.expire_timeout as u32
+        };
+
+        let popups_ref = self.popups.clone();
+        let id = notif.id;
+        entry.timeout_source = Some(glib::timeout_add_local_once(
+            std::time::Duration::from_millis(timeout_ms as u64),
+            move || {
+                dismiss_popup(&popups_ref, id);
+            },
+        ));
+    }
+
+    /// Create a new popup window for a notification.
+    fn create_new(&self, notif: &Notification) {
         let win_title = format!("i3more-notify-{}", notif.id);
 
         let window = gtk4::ApplicationWindow::builder()
@@ -74,6 +132,38 @@ impl PopupManager {
             .default_width(POPUP_WIDTH)
             .build();
         window.add_css_class("notification-popup");
+
+        // Set X11 properties before the window maps so i3 sees them at
+        // classification time. _NET_WM_WINDOW_TYPE_NOTIFICATION makes i3
+        // auto-float. _NET_WM_USER_TIME=0 prevents i3 from stealing focus.
+        window.connect_realize(|win| {
+            let surface = match win.surface() {
+                Some(s) => s,
+                None => return,
+            };
+            let x11_surface = match surface.downcast::<gdk4_x11::X11Surface>() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let xid = x11_surface.xid();
+            let xid_str = xid.to_string();
+
+            let _ = std::process::Command::new("xprop")
+                .args([
+                    "-id", &xid_str,
+                    "-f", "_NET_WM_WINDOW_TYPE", "32a",
+                    "-set", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+                ])
+                .output();
+
+            let _ = std::process::Command::new("xprop")
+                .args([
+                    "-id", &xid_str,
+                    "-f", "_NET_WM_USER_TIME", "32c",
+                    "-set", "_NET_WM_USER_TIME", "0",
+                ])
+                .output();
+        });
 
         // Build content using shared render module
         let widget = render::build_notification_widget(notif, Some(self.action_tx.clone()));
@@ -93,8 +183,16 @@ impl PopupManager {
 
         window.set_child(Some(&widget));
 
-        // i3 auto-floats via for_window [title="i3more-notify-*"] in i3 config.
-        // After map, position and resize the floating window.
+        // Capture the currently focused window so we can restore focus after
+        // i3 maps and focuses the notification popup.
+        let focused_xid = std::process::Command::new("xdotool")
+            .args(["getactivewindow"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<u64>().ok());
+
+        // After map, position and resize the floating window, then restore focus.
         let y_offset = self.compute_y_offset();
         let x = self.screen_width - POPUP_WIDTH - 8;
         let y = POPUP_TOP_OFFSET + y_offset;
@@ -110,6 +208,13 @@ impl PopupManager {
                 let _ = std::process::Command::new("i3-msg")
                     .args([&cmd])
                     .output();
+
+                // Restore focus to the window that was active before the popup
+                if let Some(prev_xid) = focused_xid {
+                    let _ = std::process::Command::new("i3-msg")
+                        .args([&format!("[id={}] focus", prev_xid)])
+                        .output();
+                }
             });
         });
 
