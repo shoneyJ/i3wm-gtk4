@@ -103,3 +103,20 @@ Add styling for the background widget to match the Gruvbox dark theme.
 - In the control panel window, the frequently used widget can stay above and rest can stay below.
 
 - The widgets must be grouped, Use of good proportion on icons is recomended.
+
+## BUG
+
+### select-wallpaper
+
+- User navigated to select a wallpaper and clicked on select, no change appeared.
+-
+
+### control-panel-flicker
+
+- when opening the control panel it flickers the current window.
+
+### persistant-wallpaper (resolved)
+
+- ~~After restart the wallpaper should be the same which has been saved.~~
+- ~~the i3config replaces it.~~
+- Fix: Removed hardcoded feh from i3 config. i3More now restores saved wallpaper on startup via `on_activate()`.

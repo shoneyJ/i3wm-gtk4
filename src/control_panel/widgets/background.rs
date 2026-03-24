@@ -47,7 +47,7 @@ fn config_path() -> PathBuf {
         .join("background.json")
 }
 
-fn load_config() -> BackgroundConfig {
+pub fn load_config() -> BackgroundConfig {
     let path = config_path();
     std::fs::read_to_string(&path)
         .ok()
@@ -65,7 +65,7 @@ fn save_config(config: &BackgroundConfig) {
     }
 }
 
-fn apply_background(image_path: &str, mode: &str) {
+pub fn apply_background(image_path: &str, mode: &str) {
     let feh_mode = format!("--bg-{}", mode);
     let _ = std::process::Command::new("feh")
         .args([&feh_mode, image_path])
@@ -240,26 +240,37 @@ pub fn build_widget() -> gtk4::Box {
     let preview_for_select = preview.clone();
     let mode_dropdown_for_select = mode_dropdown.clone();
     flow_box.connect_child_activated(move |_, child| {
-        if let Some(picture) = child.child().and_then(|w| w.downcast::<gtk4::Picture>().ok()) {
-            if let Some(tooltip) = picture.tooltip_text() {
-                let path_str = tooltip.to_string();
-                let mode_idx = mode_dropdown_for_select.selected() as usize;
-                let mode = MODES.get(mode_idx).unwrap_or(&"fill");
-
-                // Update preview
-                if let Some(pb) =
-                    load_thumbnail(Path::new(&path_str), PREVIEW_WIDTH, PREVIEW_HEIGHT)
-                {
-                    set_picture_pixbuf(&preview_for_select, &pb);
+        // Extract image path: prefer widget_name (set explicitly), fall back to tooltip
+        let path_str = child
+            .child()
+            .and_then(|w| {
+                let name = w.widget_name();
+                if !name.is_empty() && name != w.type_().name() {
+                    Some(name.to_string())
+                } else {
+                    w.tooltip_text().map(|t| t.to_string())
                 }
+            });
 
-                // Apply and save
-                apply_background(&path_str, mode);
-                {
-                    let mut cfg = config_for_select.borrow_mut();
-                    cfg.current = path_str;
-                    save_config(&cfg);
-                }
+        if let Some(path_str) = path_str {
+            let mode_idx = mode_dropdown_for_select.selected() as usize;
+            let mode = MODES.get(mode_idx).unwrap_or(&"fill");
+
+            log::info!("background: applying wallpaper: {}", path_str);
+
+            // Update preview
+            if let Some(pb) =
+                load_thumbnail(Path::new(&path_str), PREVIEW_WIDTH, PREVIEW_HEIGHT)
+            {
+                set_picture_pixbuf(&preview_for_select, &pb);
+            }
+
+            // Apply and save
+            apply_background(&path_str, mode);
+            {
+                let mut cfg = config_for_select.borrow_mut();
+                cfg.current = path_str;
+                save_config(&cfg);
             }
         }
     });
@@ -292,6 +303,7 @@ fn populate_grid(flow_box: &gtk4::FlowBox, config: &BackgroundConfig) {
         picture.set_size_request(THUMB_SIZE, THUMB_SIZE);
         picture.add_css_class("widget-background-thumb");
         picture.set_tooltip_text(Some(&img_path.to_string_lossy()));
+        picture.set_widget_name(&img_path.to_string_lossy());
 
         if img_path.to_string_lossy() == config.current {
             picture.add_css_class("widget-background-thumb-active");

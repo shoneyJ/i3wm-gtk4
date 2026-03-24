@@ -43,6 +43,36 @@ impl ControlPanel {
         window.set_size_request(PANEL_WIDTH, -1);
         window.add_css_class("control-panel");
 
+        // Set X11 properties so i3 auto-floats and doesn't steal focus.
+        window.connect_realize(|win| {
+            let surface = match win.surface() {
+                Some(s) => s,
+                None => return,
+            };
+            let x11_surface = match surface.downcast::<gdk4_x11::X11Surface>() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let xid = x11_surface.xid();
+            let xid_str = xid.to_string();
+
+            let _ = std::process::Command::new("xprop")
+                .args([
+                    "-id", &xid_str,
+                    "-f", "_NET_WM_WINDOW_TYPE", "32a",
+                    "-set", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+                ])
+                .output();
+
+            let _ = std::process::Command::new("xprop")
+                .args([
+                    "-id", &xid_str,
+                    "-f", "_NET_WM_USER_TIME", "32c",
+                    "-set", "_NET_WM_USER_TIME", "0",
+                ])
+                .output();
+        });
+
         // Header with title and close button
         let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         header.add_css_class("control-panel-header");
@@ -167,6 +197,15 @@ impl ControlPanel {
             let x = (self.screen_width - PANEL_WIDTH) / 2;
             let y = (self.screen_height - PANEL_HEIGHT) / 2;
             let title = "i3more-control-panel".to_string();
+
+            // Capture currently focused window so we can restore focus after present()
+            let focused_xid = std::process::Command::new("xdotool")
+                .args(["getactivewindow"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+
             glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
                 let criteria = format!("[title=\"{}\"]", title);
                 let cmd = format!(
@@ -175,6 +214,13 @@ impl ControlPanel {
                 let _ = std::process::Command::new("i3-msg")
                     .args([&cmd])
                     .output();
+
+                // Restore focus to the window that was active before the panel opened
+                if let Some(prev_xid) = focused_xid {
+                    let _ = std::process::Command::new("i3-msg")
+                        .args([&format!("[id={}] focus", prev_xid)])
+                        .output();
+                }
             });
 
             self.window.present();
