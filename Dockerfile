@@ -30,7 +30,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   # X11
   libx11-dev \
   libxcb1-dev \
+  # PAM (for i3more-lock authentication)
+  libpam0g-dev \
+  # libclang (for bindgen used by pam-sys)
+  libclang-dev \
+  # Testing: virtual X11 server and input simulation
+  xvfb \
+  xdotool \
+  xauth \
   && rm -rf /var/lib/apt/lists/*
+
+# Test PAM service: always-accept auth (used by integration tests only)
+RUN echo "auth    required  pam_permit.so" > /etc/pam.d/i3more-lock-test \
+ && echo "account required  pam_permit.so" >> /etc/pam.d/i3more-lock-test
 
 WORKDIR /app
 

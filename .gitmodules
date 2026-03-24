@@ -4,3 +4,12 @@
 [submodule "vendor/i3"]
 	path = vendor/i3
 	url = git@github.com:i3/i3.git
+[submodule "reference/xsecurelock"]
+	path = reference/xsecurelock
+	url = https://github.com/google/xsecurelock.git
+[submodule "reference/screenruster"]
+	path = reference/screenruster
+	url = https://github.com/meh/screenruster.git
+[submodule "reference/slock"]
+	path = reference/slock
+	url = https://github.com/tmhedberg/slock.git

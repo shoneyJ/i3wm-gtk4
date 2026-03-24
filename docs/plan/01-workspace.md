@@ -61,3 +61,25 @@ ls ~/dotfiles/i3/.config/i3/*
 - In the current open workspaces after the fix it should be 1 2 3 4 5 | 6.
 - polling is not recomended, check whether i3 provides any workspace close subscription.
 - refer to vendor/i3 to plan correctly.
+
+### Workspace nagivation: change app to next sequencial workspace
+
+- When user opens an app in workspace 1, then opens another app on same works space. It gets tiled.
+- User prefers to have a short cut key to move the app to next sequence workspace.
+  refer ~/dotfiles/i3/.config/i3 for context.
+- check if vendor provides change workspace IPC to work with refer to vendor/i3 to plan correctly.
+
+### Auto focus on next workspace of current monitor.
+
+- When user closes a container and the workspace is empty.
+- Then change the current workspace to next number workspace of current monitor.
+- if the work spaces are 1 2 3 4 5 | 6 7 8
+- - user closes all container of workspace 3, then current workspace should be 4, 1 2 3 4 | 6 7 8.
+
+- - user closes all container of workspace 5, then current workspace should be 4, 1 2 3 4 | 6 7 8.
+
+- - user closes all container of workspace 6, then current workspace should be 7, 1 2 3 4 5 | 6 7 .
+
+## BUG
+
+- The workspace number should never be less than 1. Workspace number -1 should never be a case

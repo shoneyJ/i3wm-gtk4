@@ -20,6 +20,18 @@ path = "src/audio_main.rs"
 name = "i3more-launcher"
 path = "src/launcher_main.rs"
 
+[[bin]]
+name = "i3more-workspace"
+path = "src/workspace_main.rs"
+
+[[bin]]
+name = "i3more-lock"
+path = "src/lock_main.rs"
+
+[[bin]]
+name = "i3more-popup-translate"
+path = "src/popup_translate_main.rs"
+
 [dependencies]
 gtk4 = "0.10"
 gdk4-x11 = "0.10"
@@ -32,3 +44,7 @@ async-io = "2"
 futures-util = "0.3"
 log = "0.4"
 env_logger = "0.11"
+x11rb = { version = "0.13", features = ["randr"] }
+zeroize = { version = "1", features = ["derive"] }
+nix = { version = "0.29", features = ["process", "signal"] }
+pam-client = "0.5"

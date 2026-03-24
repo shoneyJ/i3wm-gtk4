@@ -9,6 +9,13 @@ with no shell script dependencies at runtime.
 **Target environment:** Ubuntu Server + i3wm. A user installs Ubuntu Server,
 installs i3, then installs i3More as a single package/binary.
 
+## AI agent user's personal goal
+
+- Practise software architecture.
+- Learn system's programming language such as rust, c or c++.
+- Learn concepts of rust used in the project.
+- Understand linux systems better.
+
 ## Quick Start
 
 ```bash
@@ -19,14 +26,18 @@ See [docs/build.md](docs/build.md) for full build and development setup.
 
 ## Binaries
 
-| Binary | Description |
-|--------|-------------|
-| `i3more` | Main bar — workspace navigator, system tray, notifications, system info |
-| `i3more-translate` | Standalone translation popup |
-| `i3more-audio` | Volume control & audio device switching |
-| `i3more-launcher` | App search & launch |
+| Binary             | Description                                                             |
+| ------------------ | ----------------------------------------------------------------------- |
+| `i3more`           | Main bar — workspace navigator, system tray, notifications, system info |
+| `i3more-translate` | Standalone translation popup                                            |
+| `i3more-audio`     | Volume control & audio device switching                                 |
+| `i3more-launcher`  | App search & launch                                                     |
 
 ## Documentation
+
+### Learning
+
+- [Learning Plan](docs/learning-plan.md)
 
 ### Core Documentation
 

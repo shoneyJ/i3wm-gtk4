@@ -27,7 +27,8 @@ use tray::types::{TrayEvent, TrayItemId, TrayItemProps};
 /// Message sent from the i3 event listener thread to the GTK main thread.
 enum I3Event {
     WorkspacesChanged,
-    WorkspaceStructural, // "empty" or "init" — triggers renumbering
+    WorkspaceStructural,
+    WorkspaceEmpty { output: String, num: i64 },
 }
 
 /// Safely remove a GLib source without panicking if it was already removed.
@@ -57,6 +58,12 @@ fn on_activate(app: &gtk4::Application) {
         Ok(true) => log::info!("Startup: workspace numbers re-sequenced"),
         Ok(false) => log::debug!("Startup: workspace numbers already sequential"),
         Err(e) => log::warn!("Startup sequencer failed: {}", e),
+    }
+
+    // Restore saved wallpaper
+    let bg_config = control_panel::widgets::background::load_config();
+    if !bg_config.current.is_empty() {
+        control_panel::widgets::background::apply_background(&bg_config.current, &bg_config.mode);
     }
 
     // Initial i3 state query
@@ -178,8 +185,10 @@ fn on_activate(app: &gtk4::Application) {
         let mut has_structural = false;
         while let Ok(evt) = rx.try_recv() {
             has_event = true;
-            if matches!(evt, I3Event::WorkspaceStructural) {
-                has_structural = true;
+            match evt {
+                I3Event::WorkspaceStructural
+                | I3Event::WorkspaceEmpty { .. } => { has_structural = true; }
+                _ => {}
             }
         }
 
@@ -201,6 +210,7 @@ fn on_activate(app: &gtk4::Application) {
                     debounce_clear.borrow_mut().take();
                     refresh_state(&state_inner, &container_inner);
                     // Renumber workspaces if a structural event occurred
+                    // (auto-focus already ran in the event listener thread)
                     if has_structural {
                         match sequencer::renumber_workspaces() {
                             Ok(true) => {
@@ -389,8 +399,18 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
         let event = if event_type == ipc::EVENT_WORKSPACE {
             let change = payload["change"].as_str().unwrap_or("");
             match change {
-                "empty" | "init" => {
-                    log::info!("Workspace structural event: {}", change);
+                "empty" => {
+                    let output = payload["current"]["output"].as_str().unwrap_or("").to_string();
+                    let num = payload["current"]["num"].as_i64().unwrap_or(0);
+                    log::info!("Workspace empty event: ws {} on output {}", num, output);
+                    // Auto-focus immediately — no debounce delay
+                    if let Err(e) = sequencer::focus_next_on_output(&output, num) {
+                        log::error!("Auto-focus error: {}", e);
+                    }
+                    I3Event::WorkspaceEmpty { output, num }
+                }
+                "init" => {
+                    log::info!("Workspace structural event: init");
                     I3Event::WorkspaceStructural
                 }
                 "rename" => {
