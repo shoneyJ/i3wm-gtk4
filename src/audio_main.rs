@@ -322,6 +322,91 @@ fn audio_switch() -> Result<(), Error> {
 }
 
 // ---------------------------------------------------------------------------
+// Mic mute
+// ---------------------------------------------------------------------------
+
+fn mic_mute() -> Result<(), Error> {
+    run_cmd("pactl", &["set-source-mute", "@DEFAULT_SOURCE@", "toggle"])?;
+    let text = run_cmd("pactl", &["get-source-mute", "@DEFAULT_SOURCE@"])?;
+    let muted = text.contains("yes");
+    if muted {
+        notify("Microphone", "Muted", "microphone-sensitivity-muted", "mic")
+    } else {
+        notify("Microphone", "Unmuted", "microphone-sensitivity-high", "mic")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Media control (playerctl)
+// ---------------------------------------------------------------------------
+
+fn media_play_pause() -> Result<(), Error> {
+    run_cmd("playerctl", &["play-pause"])?;
+    Ok(())
+}
+
+fn media_next() -> Result<(), Error> {
+    run_cmd("playerctl", &["next"])?;
+    Ok(())
+}
+
+fn media_prev() -> Result<(), Error> {
+    run_cmd("playerctl", &["previous"])?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Brightness control (sysfs)
+// ---------------------------------------------------------------------------
+
+const BRIGHTNESS_STEP: u32 = 5;
+const MIN_BRIGHTNESS_PCT: u32 = 5;
+
+/// Find the first backlight device in /sys/class/backlight.
+fn find_backlight() -> Result<PathBuf, Error> {
+    let backlight_dir = std::path::Path::new("/sys/class/backlight");
+    let entry = std::fs::read_dir(backlight_dir)
+        .map_err(|e| Error::CommandFailed(format!("read /sys/class/backlight: {}", e)))?
+        .filter_map(|e| e.ok())
+        .next()
+        .ok_or_else(|| Error::CommandFailed("no backlight device found".into()))?;
+    Ok(entry.path())
+}
+
+fn read_sysfs_u32(path: &std::path::Path) -> Result<u32, Error> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::CommandFailed(format!("read {}: {}", path.display(), e)))?;
+    text.trim()
+        .parse::<u32>()
+        .map_err(|e| Error::ParseError(format!("{}: {}", path.display(), e)))
+}
+
+fn brightness_up() -> Result<(), Error> {
+    let dev = find_backlight()?;
+    let max = read_sysfs_u32(&dev.join("max_brightness"))?;
+    let current = read_sysfs_u32(&dev.join("brightness"))?;
+    let step = max * BRIGHTNESS_STEP / 100;
+    let target = min(current + step, max);
+    // brightnessctl handles permissions (suid/udev rules)
+    run_cmd("brightnessctl", &["s", &format!("{}",  target)])?;
+    let pct = 100 * target / max;
+    notify("Brightness", &format!("{}%", pct), "display-brightness-symbolic", "brightness")
+}
+
+fn brightness_down() -> Result<(), Error> {
+    let dev = find_backlight()?;
+    let max = read_sysfs_u32(&dev.join("max_brightness"))?;
+    let current = read_sysfs_u32(&dev.join("brightness"))?;
+    let step = max * BRIGHTNESS_STEP / 100;
+    let min_val = max * MIN_BRIGHTNESS_PCT / 100;
+    let target = if current > step { current - step } else { min_val };
+    let target = std::cmp::max(target, min_val);
+    run_cmd("brightnessctl", &["s", &format!("{}", target)])?;
+    let pct = 100 * target / max;
+    notify("Brightness", &format!("{}%", pct), "display-brightness-symbolic", "brightness")
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -329,10 +414,16 @@ fn print_usage() {
     eprintln!("Usage: i3more-audio <command>");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  volume-up      Increase volume");
-    eprintln!("  volume-down    Decrease volume");
-    eprintln!("  volume-mute    Toggle mute");
-    eprintln!("  audio-switch   Cycle audio output device");
+    eprintln!("  volume-up        Increase volume");
+    eprintln!("  volume-down      Decrease volume");
+    eprintln!("  volume-mute      Toggle mute");
+    eprintln!("  audio-switch     Cycle audio output device");
+    eprintln!("  mic-mute         Toggle microphone mute");
+    eprintln!("  play-pause       Toggle media play/pause");
+    eprintln!("  next             Next media track");
+    eprintln!("  prev             Previous media track");
+    eprintln!("  brightness-up    Increase screen brightness");
+    eprintln!("  brightness-down  Decrease screen brightness");
 }
 
 fn main() {
@@ -343,6 +434,12 @@ fn main() {
         Some("volume-down") => volume_down(),
         Some("volume-mute") => volume_mute(),
         Some("audio-switch") => audio_switch(),
+        Some("mic-mute") => mic_mute(),
+        Some("play-pause") => media_play_pause(),
+        Some("next") => media_next(),
+        Some("prev") => media_prev(),
+        Some("brightness-up") => brightness_up(),
+        Some("brightness-down") => brightness_down(),
         _ => {
             print_usage();
             std::process::exit(1);

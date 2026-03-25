@@ -122,6 +122,18 @@ popover > contents {
     padding: 4px;
 }
 
+popover modelbutton {
+    color: #ebdbb2;
+}
+
+popover modelbutton:hover {
+    background-color: #3c3836;
+}
+
+popover modelbutton:disabled {
+    color: #665c54;
+}
+
 .notification-bell {
     opacity: 0.85;
     padding: 0 2px;

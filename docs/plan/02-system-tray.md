@@ -134,3 +134,8 @@ Calls are dispatched on a background thread to avoid blocking GTK.
 
 - Currently i can see a network app in the system tray. But I cannot change the network. right click or left click does nothing.
 - Comment the section of i3 config the part where system tray gets called.
+
+## UI enhancement
+
+- Tray app icons right click popup menu displays the disabled link as white text and enabled link as gray.
+  The color template must be switched.

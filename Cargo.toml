@@ -32,6 +32,22 @@ path = "src/lock_main.rs"
 name = "i3more-popup-translate"
 path = "src/popup_translate_main.rs"
 
+[[bin]]
+name = "i3more-power"
+path = "src/power_main.rs"
+
+[[bin]]
+name = "i3more-power-profile"
+path = "src/power_profile_main.rs"
+
+[[bin]]
+name = "i3more-keyhint"
+path = "src/keyhint_main.rs"
+
+[[bin]]
+name = "i3more-window"
+path = "src/window_main.rs"
+
 [dependencies]
 gtk4 = "0.10"
 gdk4-x11 = "0.10"

@@ -1,0 +1,69 @@
+/* i3More shared menu theme — Gruvbox dark */
+
+window {
+    background-color: #1d2021;
+}
+
+.menu-main {
+    background-color: #1d2021;
+    padding: 8px;
+}
+
+.menu-search {
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 14px;
+    caret-color: #ebdbb2;
+    margin-bottom: 6px;
+}
+
+.menu-search:focus {
+    border-color: #458588;
+}
+
+.menu-list {
+    background-color: #1d2021;
+}
+
+.menu-row {
+    padding: 8px 12px;
+    border-radius: 4px;
+    color: #ebdbb2;
+}
+
+row:selected .menu-row {
+    background-color: #458588;
+}
+
+row:hover .menu-row {
+    background-color: #3c3836;
+}
+
+row:selected:hover .menu-row {
+    background-color: #458588;
+}
+
+.menu-label {
+    color: #ebdbb2;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.menu-desc {
+    color: #a89984;
+    font-size: 11px;
+}
+
+.menu-key {
+    color: #83a598;
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.menu-active {
+    color: #b8bb26;
+    font-weight: bold;
+}
