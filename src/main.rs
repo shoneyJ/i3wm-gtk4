@@ -20,7 +20,8 @@ use navigator::NavigatorState;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use notify::types::NotifyEvent;
 use tray::types::{TrayEvent, TrayItemId, TrayItemProps};
 
@@ -106,9 +107,12 @@ fn on_activate(app: &gtk4::Application) {
     let (tx, rx) = mpsc::channel::<I3Event>();
     start_event_listener(tx);
 
+    // Shared shutdown flag for graceful cleanup
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
     // Set up tray watcher
     let (tray_tx, tray_rx) = mpsc::channel::<TrayEvent>();
-    tray::start_watcher(tray_tx);
+    let tray_handle = tray::start_watcher(tray_tx, shutdown_flag.clone());
 
     let tray_state: Rc<RefCell<HashMap<TrayItemId, TrayItemProps>>> =
         Rc::new(RefCell::new(HashMap::new()));
@@ -116,7 +120,7 @@ fn on_activate(app: &gtk4::Application) {
     // Set up notification daemon
     let (notify_tx, notify_rx) = mpsc::channel::<NotifyEvent>();
     let notify_close_tx = notify_tx.clone();
-    let action_tx = notify::start_notification_daemon(notify_tx);
+    let (action_tx, notify_handle) = notify::start_notification_daemon(notify_tx, shutdown_flag.clone());
 
     i3more::css::load_css("notification.css", include_str!("../assets/notification.css"));
     let popup_manager = Rc::new(notify::popup::PopupManager::new(app, notify_close_tx, action_tx));
@@ -356,6 +360,30 @@ fn on_activate(app: &gtk4::Application) {
             .args(["windowsize", &xid.to_string(), &sw.to_string(), "40"])
             .output();
     });
+
+    // Graceful shutdown: signal background threads and join them
+    {
+        let shutdown = shutdown_flag.clone();
+        let notify_handle = Arc::new(std::sync::Mutex::new(Some(notify_handle)));
+        let tray_handle = Arc::new(std::sync::Mutex::new(Some(tray_handle)));
+        app.connect_shutdown(move |_| {
+            log::info!("Shutdown: signaling background threads");
+            shutdown.store(true, Ordering::Relaxed);
+
+            // Give threads time to notice the flag and clean up D-Bus names
+            std::thread::sleep(std::time::Duration::from_millis(200));
+
+            // Join threads — take() ensures we only join once
+            if let Some(h) = notify_handle.lock().unwrap().take() {
+                let _ = h.join();
+            }
+            if let Some(h) = tray_handle.lock().unwrap().take() {
+                let _ = h.join();
+            }
+
+            log::info!("Shutdown: all threads joined");
+        });
+    }
 
     window.present();
 }

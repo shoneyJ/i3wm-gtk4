@@ -167,37 +167,22 @@ fn invoke_item_method(id: &TrayItemId, method: &str, x: i32, y: i32) {
     let object_path = id.object_path.clone();
     let method = method.to_string();
 
-    glib::spawn_future_local(async move {
-        let _ = std::thread::spawn(move || {
-            async_io::block_on(async {
-                let conn = match zbus::Connection::session().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::warn!("Tray D-Bus connect failed: {}", e);
-                        return;
-                    }
-                };
-                let proxy = match zbus::Proxy::new(
-                    &conn,
-                    bus_name.as_str(),
-                    object_path.as_str(),
-                    "org.kde.StatusNotifierItem",
-                )
-                .await
-                {
-                    Ok(p) => p,
-                    Err(e) => {
-                        log::warn!("Tray proxy failed: {}", e);
-                        return;
-                    }
-                };
-                let result: Result<(), zbus::Error> =
-                    proxy.call(method.as_str(), &(x, y)).await;
-                if let Err(e) = result {
-                    log::warn!("Tray {} call failed: {}", method, e);
-                }
-            });
-        })
-        .join();
+    std::thread::spawn(move || {
+        let mut conn = match linbus::Connection::session() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Tray D-Bus connect failed: {}", e);
+                return;
+            }
+        };
+        let mut proxy = linbus::Proxy::new(
+            &mut conn,
+            &bus_name,
+            &object_path,
+            "org.kde.StatusNotifierItem",
+        );
+        if let Err(e) = proxy.call(&method, vec![linbus::Value::I32(x), linbus::Value::I32(y)]) {
+            log::warn!("Tray {} call failed: {}", method, e);
+        }
     });
 }

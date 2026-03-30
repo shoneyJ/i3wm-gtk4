@@ -1,0 +1,53 @@
+/* i3More power menu — confirmation dialog styles */
+
+.confirm-box {
+    background-color: #282828;
+    border-radius: 8px;
+    border: 1px solid #3c3836;
+}
+
+.confirm-title {
+    color: #ebdbb2;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.confirm-message {
+    color: #a89984;
+    font-size: 13px;
+}
+
+.confirm-yes {
+    background-color: #cc241d;
+    color: #ebdbb2;
+    border-radius: 4px;
+    padding: 6px 16px;
+    font-weight: bold;
+    border: none;
+}
+
+.confirm-yes:hover {
+    background-color: #fb4934;
+}
+
+.confirm-yes:focus {
+    background-color: #fb4934;
+    outline: 2px solid #ebdbb2;
+}
+
+.confirm-no {
+    background-color: #3c3836;
+    color: #ebdbb2;
+    border-radius: 4px;
+    padding: 6px 16px;
+    border: none;
+}
+
+.confirm-no:hover {
+    background-color: #504945;
+}
+
+.confirm-no:focus {
+    background-color: #504945;
+    outline: 2px solid #a89984;
+}

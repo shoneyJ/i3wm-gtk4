@@ -1,0 +1,72 @@
+%%{init: {'theme': 'dark'}}%%
+graph TB
+    subgraph NAMING["D-Bus Interface Naming (Reverse-DNS Convention)"]
+        direction TB
+        N1["<b>org.freedesktop.Notifications</b><br/>───────────────────<br/>org.freedesktop = freedesktop.org standards body<br/>Notifications = the interface name<br/><br/>Same convention as Java packages:<br/>com.google.android.app → com.canonical.dbusmenu"]
+    end
+
+    subgraph ORIGIN["Who Defines These Interfaces?"]
+        direction LR
+        FD["<b>freedesktop.org</b><br/>(cross-desktop standards)<br/>───────────────<br/>org.freedesktop.Notifications<br/>org.freedesktop.DBus<br/>org.freedesktop.DBus.Properties<br/>org.freedesktop.login1.Manager"]
+        KDE["<b>KDE Project</b><br/>(adopted by GNOME too)<br/>───────────────<br/>org.kde.StatusNotifierWatcher<br/>org.kde.StatusNotifierItem"]
+        CAN["<b>Canonical / Ubuntu</b><br/>(Unity desktop era)<br/>───────────────<br/>com.canonical.dbusmenu"]
+    end
+
+    subgraph KERNEL["Linux Kernel Layer"]
+        direction LR
+        SOCK["<b>Unix Domain Socket</b><br/>AF_UNIX, SOCK_STREAM<br/>kernel: net/unix/af_unix.c"]
+        EPOLL["<b>epoll</b><br/>I/O event notification<br/>kernel: fs/eventpoll.c"]
+        SCM["<b>SCM_RIGHTS</b><br/>File descriptor passing<br/>kernel: net/unix/af_unix.c"]
+    end
+
+    subgraph TRANSPORT["Transport Layer (What D-Bus Rides On)"]
+        direction TB
+        SESSION["/run/user/1000/bus<br/><b>Session Bus Socket</b><br/>Per-user, desktop apps"]
+        SYSTEM["/run/dbus/system_bus_socket<br/><b>System Bus Socket</b><br/>System-wide, root services"]
+    end
+
+    subgraph WIRE["D-Bus Wire Protocol (Binary over Socket)"]
+        direction TB
+        MSG["Every message on the wire:<br/>┌─────────────────────────────────┐<br/>│ Header: endian│type│flags│ver   │<br/>│         body_len │ serial       │<br/>│ Fields: PATH, INTERFACE, MEMBER │<br/>│         DESTINATION, SIGNATURE  │<br/>│ Padding: align to 8 bytes       │<br/>├─────────────────────────────────┤<br/>│ Body: marshalled args           │<br/>│ (aligned per type signature)    │<br/>└─────────────────────────────────┘"]
+        TYPES["<b>Message Types</b><br/>1 METHOD_CALL  → request<br/>2 METHOD_RETURN → response<br/>3 ERROR        → failure<br/>4 SIGNAL       → broadcast"]
+    end
+
+    subgraph DBUS_DAEMON["dbus-daemon (Message Router)"]
+        direction TB
+        ROUTER["<b>dbus-daemon</b> process<br/>───────────────────<br/>• Routes messages between clients<br/>• Manages bus names (RequestName)<br/>• Matches signals to subscribers<br/>• Authenticates connections<br/><br/>NOT in kernel — it is a userspace<br/>process using Unix sockets + epoll"]
+    end
+
+    subgraph I3MORE["i3More Project — D-Bus Usage"]
+        direction TB
+
+        subgraph HOST["Services We HOST (we implement these)"]
+            NOTIF_D["<b>org.freedesktop.Notifications</b><br/>notify/daemon.rs<br/>Receives: Notify(), CloseNotification()<br/>Emits: NotificationClosed, ActionInvoked"]
+            TRAY_W["<b>org.kde.StatusNotifierWatcher</b><br/>tray/watcher.rs<br/>Receives: RegisterStatusNotifierItem()<br/>Emits: ItemRegistered, ItemUnregistered"]
+        end
+
+        subgraph CLIENT["Services We CALL (other apps implement these)"]
+            SNI["<b>org.kde.StatusNotifierItem</b><br/>tray/item.rs<br/>We read: Title, IconName, Status, Menu"]
+            DMENU["<b>com.canonical.dbusmenu</b><br/>tray/dbusmenu.rs<br/>We call: GetLayout(), Event()"]
+            LOGIN["<b>org.freedesktop.login1.Manager</b><br/>lock/security.rs<br/>We call: Inhibit() → returns fd"]
+        end
+    end
+
+    subgraph FLOW["How a notify-send Reaches Your Screen"]
+        direction TB
+        STEP1["1. notify-send connects to<br/>/run/user/1000/bus<br/>(Unix domain socket)"]
+        STEP2["2. Sends METHOD_CALL message<br/>dest=org.freedesktop.Notifications<br/>member=Notify<br/>body=(app, id, icon, summary, body, ...)"]
+        STEP3["3. dbus-daemon routes message<br/>to i3more (owns that bus name)"]
+        STEP4["4. i3more reads message from socket<br/>(epoll_wait wakes up the event loop)"]
+        STEP5["5. Deserializes D-Bus wire format<br/>→ Notification struct"]
+        STEP6["6. Sends METHOD_RETURN with notification id<br/>back through dbus-daemon to notify-send"]
+        STEP7["7. Sends NotifyEvent over mpsc channel<br/>to GTK thread → popup appears"]
+
+        STEP1 --> STEP2 --> STEP3 --> STEP4 --> STEP5 --> STEP6 --> STEP7
+    end
+
+    NAMING -.-> ORIGIN
+    ORIGIN -.-> I3MORE
+    I3MORE --> DBUS_DAEMON
+    DBUS_DAEMON --> WIRE
+    WIRE --> TRANSPORT
+    TRANSPORT --> KERNEL

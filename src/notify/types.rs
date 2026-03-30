@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::time::SystemTime;
-use zbus::zvariant::OwnedValue;
 
 #[derive(Debug, Clone)]
 pub struct Notification {
@@ -12,7 +11,7 @@ pub struct Notification {
     pub summary: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
-    pub hints: HashMap<String, OwnedValue>,
+    pub hints: HashMap<String, linbus::Value>,
     pub expire_timeout: i32,
     pub timestamp: SystemTime,
 }

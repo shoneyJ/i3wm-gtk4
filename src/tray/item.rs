@@ -1,30 +1,36 @@
 /// Read StatusNotifierItem properties from a tray app over D-Bus.
 
-use zbus::Connection;
+use std::collections::HashMap;
+use linbus::{Connection, Message, Value};
 
 use super::types::{TrayItemId, TrayItemProps, TrayPixmap};
 
-/// Read all relevant properties from an SNI item.
-pub async fn read_item_props(
-    conn: &Connection,
+/// Read all relevant properties from an SNI item using Properties.GetAll.
+pub fn read_item_props(
+    conn: &mut Connection,
     bus_name: &str,
     object_path: &str,
-) -> Result<TrayItemProps, zbus::Error> {
-    let proxy = zbus::Proxy::new(
-        conn,
+) -> Result<TrayItemProps, linbus::LinbusError> {
+    let msg = Message::method_call(
         bus_name,
         object_path,
-        "org.kde.StatusNotifierItem",
-    )
-    .await?;
+        "org.freedesktop.DBus.Properties",
+        "GetAll",
+    ).with_body(vec![Value::String("org.kde.StatusNotifierItem".into())]);
 
-    let title = read_string_prop(&proxy, "Title").await;
-    let icon_name = read_string_prop(&proxy, "IconName").await;
-    let status = read_string_prop(&proxy, "Status").await;
-    let menu = read_optional_string_prop(&proxy, "Menu").await;
-    let item_is_menu = read_bool_prop(&proxy, "ItemIsMenu").await;
-    let tooltip = read_tooltip(&proxy).await;
-    let icon_pixmap = read_icon_pixmap(&proxy).await;
+    let reply = conn.call(&msg, 3000)?;
+
+    let props_dict: HashMap<String, Value> = reply.body.first()
+        .and_then(|v| v.to_string_dict())
+        .unwrap_or_default();
+
+    let title = prop_str(&props_dict, "Title");
+    let icon_name = prop_str(&props_dict, "IconName");
+    let status = prop_str(&props_dict, "Status");
+    let menu = prop_path(&props_dict, "Menu");
+    let item_is_menu = prop_bool(&props_dict, "ItemIsMenu");
+    let tooltip = extract_tooltip(&props_dict);
+    let icon_pixmap = extract_icon_pixmap(&props_dict);
 
     Ok(TrayItemProps {
         id: TrayItemId {
@@ -41,80 +47,66 @@ pub async fn read_item_props(
     })
 }
 
-async fn read_string_prop(proxy: &zbus::Proxy<'_>, name: &str) -> String {
-    proxy
-        .get_property::<String>(name)
-        .await
-        .unwrap_or_default()
-}
-
-async fn read_optional_string_prop(proxy: &zbus::Proxy<'_>, name: &str) -> Option<String> {
-    // Menu property is an object path
-    match proxy.get_property::<zbus::zvariant::OwnedObjectPath>(name).await {
-        Ok(path) => {
-            let s = path.to_string();
-            if s.is_empty() || s == "/" {
-                None
-            } else {
-                Some(s)
-            }
-        }
-        Err(_) => None,
+fn unwrap_variant(v: &Value) -> &Value {
+    match v {
+        Value::Variant(inner) => unwrap_variant(inner),
+        other => other,
     }
 }
 
-async fn read_bool_prop(proxy: &zbus::Proxy<'_>, name: &str) -> bool {
-    proxy.get_property::<bool>(name).await.unwrap_or(false)
+fn prop_str(props: &HashMap<String, Value>, key: &str) -> String {
+    props.get(key)
+        .map(unwrap_variant)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
-/// Read the ToolTip property.
-/// The SNI spec defines ToolTip as (s, a(iiay), s, s) — icon_name, icon_pixmap, title, description.
-/// We extract the title (3rd element).
-async fn read_tooltip(proxy: &zbus::Proxy<'_>) -> String {
-    // Try the structured tooltip first
-    let result = proxy
-        .get_property::<(
-            String,
-            Vec<(i32, i32, Vec<u8>)>,
-            String,
-            String,
-        )>("ToolTip")
-        .await;
-
-    match result {
-        Ok((_icon_name, _pixmaps, title, description)) => {
-            if !title.is_empty() {
-                title
-            } else {
-                description
-            }
-        }
-        Err(_) => {
-            // Some apps use a plain string tooltip
-            read_string_prop(proxy, "ToolTip").await
-        }
-    }
+fn prop_path(props: &HashMap<String, Value>, key: &str) -> Option<String> {
+    let s = props.get(key)
+        .map(unwrap_variant)
+        .and_then(|v| v.as_str())?;
+    if s.is_empty() || s == "/" { None } else { Some(s.to_string()) }
 }
 
-/// Read IconPixmap property: a(iiay) — array of (width, height, ARGB data).
-async fn read_icon_pixmap(proxy: &zbus::Proxy<'_>) -> Option<Vec<TrayPixmap>> {
-    let result = proxy
-        .get_property::<Vec<(i32, i32, Vec<u8>)>>("IconPixmap")
-        .await;
+fn prop_bool(props: &HashMap<String, Value>, key: &str) -> bool {
+    props.get(key)
+        .map(unwrap_variant)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
 
-    match result {
-        Ok(pixmaps) if !pixmaps.is_empty() => {
-            Some(
-                pixmaps
-                    .into_iter()
-                    .map(|(w, h, data)| TrayPixmap {
-                        width: w,
-                        height: h,
-                        argb_data: data,
-                    })
-                    .collect(),
-            )
+fn extract_tooltip(props: &HashMap<String, Value>) -> String {
+    let val = match props.get("ToolTip") {
+        Some(v) => unwrap_variant(v),
+        None => return String::new(),
+    };
+
+    if let Some(fields) = val.as_struct_fields() {
+        if fields.len() >= 4 {
+            let title = fields[2].as_str().unwrap_or("");
+            if !title.is_empty() { return title.to_string(); }
+            return fields[3].as_str().unwrap_or("").to_string();
         }
-        _ => None,
     }
+    val.as_str().unwrap_or("").to_string()
+}
+
+fn extract_icon_pixmap(props: &HashMap<String, Value>) -> Option<Vec<TrayPixmap>> {
+    let val = props.get("IconPixmap").map(unwrap_variant)?;
+    let arr = val.as_array()?;
+    if arr.is_empty() { return None; }
+
+    let pixmaps: Vec<TrayPixmap> = arr.iter().filter_map(|entry| {
+        let inner = unwrap_variant(entry);
+        let fields = inner.as_struct_fields()?;
+        if fields.len() < 3 { return None; }
+        let w = fields[0].as_i32()?;
+        let h = fields[1].as_i32()?;
+        let data: Vec<u8> = fields[2].as_array()?
+            .iter().filter_map(|v| v.as_u8()).collect();
+        Some(TrayPixmap { width: w, height: h, argb_data: data })
+    }).collect();
+
+    if pixmaps.is_empty() { None } else { Some(pixmaps) }
 }

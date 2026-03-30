@@ -1,26 +1,33 @@
-//! i3more-power — power menu replacing rofi powermenu.
+//! i3more-power — power menu with confirmation for destructive actions.
 //!
 //! Shows Lock / Logout / Reboot / Shutdown / Suspend / Hibernate.
+//! Destructive actions prompt for confirmation and show a notification.
 
 use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
+use std::cell::Cell;
+use std::rc::Rc;
 
 const WINDOW_WIDTH: i32 = 250;
 const WINDOW_HEIGHT: i32 = 280;
+const CONFIRM_WIDTH: i32 = 300;
+const CONFIRM_HEIGHT: i32 = 150;
 
 struct PowerAction {
     label: &'static str,
     icon: char,
+    needs_confirm: bool,
+    notify_msg: &'static str,
 }
 
 const ACTIONS: &[PowerAction] = &[
-    PowerAction { label: "Lock", icon: '\u{f023}' },
-    PowerAction { label: "Logout", icon: '\u{f2f5}' },
-    PowerAction { label: "Suspend", icon: '\u{f186}' },
-    PowerAction { label: "Hibernate", icon: '\u{f7e4}' },
-    PowerAction { label: "Reboot", icon: '\u{f01e}' },
-    PowerAction { label: "Shutdown", icon: '\u{f011}' },
+    PowerAction { label: "Lock",      icon: '\u{f023}', needs_confirm: false, notify_msg: "" },
+    PowerAction { label: "Logout",    icon: '\u{f2f5}', needs_confirm: true,  notify_msg: "Logging out of session..." },
+    PowerAction { label: "Suspend",   icon: '\u{f186}', needs_confirm: false, notify_msg: "" },
+    PowerAction { label: "Hibernate", icon: '\u{f7e4}', needs_confirm: true,  notify_msg: "System is hibernating..." },
+    PowerAction { label: "Reboot",    icon: '\u{f01e}', needs_confirm: true,  notify_msg: "System is rebooting..." },
+    PowerAction { label: "Shutdown",  icon: '\u{f011}', needs_confirm: true,  notify_msg: "System is powering off..." },
 ];
 
 fn main() {
@@ -45,6 +52,7 @@ fn on_activate(app: &gtk4::Application) {
 
     i3more::fa::register_font();
     i3more::css::load_css("menu.css", include_str!("../assets/menu.css"));
+    i3more::css::load_css("power.css", include_str!("../assets/power.css"));
 
     let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
     vbox.add_css_class("menu-main");
@@ -83,8 +91,9 @@ fn on_activate(app: &gtk4::Application) {
     scrolled.set_child(Some(&listbox));
     vbox.append(&scrolled);
 
-    listbox.connect_row_activated(|_, row| {
-        execute_action(row);
+    let app_ref = app.clone();
+    listbox.connect_row_activated(move |_, row| {
+        execute_action(&app_ref, row);
     });
 
     let window = gtk4::ApplicationWindow::builder()
@@ -99,12 +108,13 @@ fn on_activate(app: &gtk4::Application) {
 
     let key_ctrl = gtk4::EventControllerKey::new();
     let listbox_ref = listbox.clone();
+    let app_ref = app.clone();
     key_ctrl.connect_key_pressed(move |_, key, _, _| {
         match key {
             gdk::Key::Escape => std::process::exit(0),
             gdk::Key::Return | gdk::Key::KP_Enter => {
                 if let Some(row) = listbox_ref.selected_row() {
-                    execute_action(&row);
+                    execute_action(&app_ref, &row);
                 }
                 glib::Propagation::Stop
             }
@@ -113,8 +123,6 @@ fn on_activate(app: &gtk4::Application) {
     });
     window.add_controller(key_ctrl);
 
-    // Set X11 position in connect_realize — fires BEFORE the window is mapped,
-    // so i3 sees the correct position from the start (no flicker).
     let (target_x, target_y) = compute_position_east();
     window.connect_realize(move |win| {
         set_x11_position(win, target_x, target_y);
@@ -124,11 +132,125 @@ fn on_activate(app: &gtk4::Application) {
     listbox.grab_focus();
 }
 
-fn execute_action(row: &gtk4::ListBoxRow) {
+fn execute_action(app: &gtk4::Application, row: &gtk4::ListBoxRow) {
     let idx: usize = row.widget_name().parse().unwrap_or(0);
-    let label = ACTIONS.get(idx).map(|a| a.label).unwrap_or("");
-    log::info!("Power action: {}", label);
+    let action = match ACTIONS.get(idx) {
+        Some(a) => a,
+        None => return,
+    };
+    log::info!("Power action: {}", action.label);
 
+    if action.needs_confirm {
+        show_confirm_dialog(app, action);
+    } else {
+        run_action(action.label);
+    }
+}
+
+fn show_confirm_dialog(app: &gtk4::Application, action: &'static PowerAction) {
+    // Hide the main menu window
+    if let Some(win) = app.active_window() {
+        win.set_visible(false);
+    }
+
+    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    vbox.add_css_class("confirm-box");
+    vbox.set_valign(gtk4::Align::Center);
+    vbox.set_halign(gtk4::Align::Center);
+    vbox.set_margin_top(20);
+    vbox.set_margin_bottom(20);
+    vbox.set_margin_start(20);
+    vbox.set_margin_end(20);
+
+    // Icon
+    let icon_label = gtk4::Label::new(None);
+    icon_label.set_markup(&i3more::fa::fa_icon(action.icon, "#fb4934", 24));
+    vbox.append(&icon_label);
+
+    // Question
+    let question = gtk4::Label::new(Some(&format!("{}?", action.label)));
+    question.add_css_class("confirm-title");
+    vbox.append(&question);
+
+    // Message
+    let msg = gtk4::Label::new(Some(action.notify_msg));
+    msg.add_css_class("confirm-message");
+    vbox.append(&msg);
+
+    // Buttons
+    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    btn_box.set_halign(gtk4::Align::Center);
+
+    let yes_btn = gtk4::Button::with_label("Yes");
+    yes_btn.add_css_class("confirm-yes");
+    yes_btn.set_size_request(80, -1);
+
+    let no_btn = gtk4::Button::with_label("No");
+    no_btn.add_css_class("confirm-no");
+    no_btn.set_size_request(80, -1);
+
+    btn_box.append(&yes_btn);
+    btn_box.append(&no_btn);
+    vbox.append(&btn_box);
+
+    let confirm_win = gtk4::ApplicationWindow::builder()
+        .application(app)
+        .title("Confirm")
+        .resizable(false)
+        .decorated(false)
+        .default_width(CONFIRM_WIDTH)
+        .default_height(CONFIRM_HEIGHT)
+        .child(&vbox)
+        .build();
+
+    // Yes → notify + execute
+    let cw = confirm_win.clone();
+    yes_btn.connect_clicked(move |_| {
+        cw.close();
+        // Send notification before executing
+        let _ = std::process::Command::new("notify-send")
+            .args(["-u", "critical", "-t", "10000", action.label, action.notify_msg])
+            .spawn();
+        // Brief delay so the notification renders
+        glib::timeout_add_local_once(std::time::Duration::from_secs(1), move || {
+            run_action(action.label);
+            std::process::exit(0);
+        });
+    });
+
+    // No → close and exit
+    let cw = confirm_win.clone();
+    no_btn.connect_clicked(move |_| {
+        cw.close();
+        std::process::exit(0);
+    });
+
+    // Escape → cancel
+    let key_ctrl = gtk4::EventControllerKey::new();
+    let cw = confirm_win.clone();
+    key_ctrl.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk::Key::Escape {
+            cw.close();
+            std::process::exit(0);
+        }
+        if key == gdk::Key::Return || key == gdk::Key::KP_Enter {
+            // Enter = Yes (focused by default)
+            return glib::Propagation::Proceed;
+        }
+        glib::Propagation::Proceed
+    });
+    confirm_win.add_controller(key_ctrl);
+
+    let (target_x, target_y) = compute_position_center();
+    confirm_win.connect_realize(move |win| {
+        set_x11_position(win, target_x, target_y);
+    });
+
+    confirm_win.present();
+    yes_btn.grab_focus();
+}
+
+fn run_action(label: &str) {
     match label {
         "Lock" => { let _ = std::process::Command::new("i3more-lock").spawn(); }
         "Logout" => { let _ = std::process::Command::new("i3-msg").arg("exit").spawn(); }
@@ -138,11 +260,9 @@ fn execute_action(row: &gtk4::ListBoxRow) {
         "Hibernate" => { let _ = std::process::Command::new("systemctl").arg("hibernate").spawn(); }
         _ => {}
     }
-    std::process::exit(0);
 }
 
-/// Set the X11 window position before mapping using x11rb ConfigureWindow.
-/// Called from connect_realize (after X11 window exists, before map).
+/// Set the X11 window position before mapping.
 fn set_x11_position(win: &gtk4::ApplicationWindow, x: i32, y: i32) {
     let surface = match win.surface() {
         Some(s) => s,
@@ -154,7 +274,6 @@ fn set_x11_position(win: &gtk4::ApplicationWindow, x: i32, y: i32) {
     };
     let xid = x11_surface.xid() as u32;
 
-    // Use xdotool with the exact XID to move before map
     let _ = std::process::Command::new("xdotool")
         .args([
             "windowmove", "--sync",
@@ -164,30 +283,41 @@ fn set_x11_position(win: &gtk4::ApplicationWindow, x: i32, y: i32) {
         .output();
 }
 
-/// Compute position on the right edge of the focused monitor.
+/// Compute position on the right edge of the focused monitor (for main menu).
 fn compute_position_east() -> (i32, i32) {
-    let output_name = match get_focused_output() {
-        Some(name) => name,
-        None => return (0, 0),
-    };
+    let (geom, _) = get_focused_monitor_geom();
+    (geom.0 + geom.2 - WINDOW_WIDTH - 10, geom.1 + (geom.3 - WINDOW_HEIGHT) / 2)
+}
+
+/// Compute centered position on the focused monitor (for confirmation).
+fn compute_position_center() -> (i32, i32) {
+    let (geom, _) = get_focused_monitor_geom();
+    (geom.0 + (geom.2 - CONFIRM_WIDTH) / 2, geom.1 + (geom.3 - CONFIRM_HEIGHT) / 2)
+}
+
+/// Returns ((x, y, width, height), output_name) for the focused monitor.
+fn get_focused_monitor_geom() -> ((i32, i32, i32, i32), String) {
+    let output_name = get_focused_output().unwrap_or_default();
+    if output_name.is_empty() {
+        return ((0, 0, 1920, 1080), String::new());
+    }
+
     let display = match gdk::Display::default() {
         Some(d) => d,
-        None => return (0, 0),
+        None => return ((0, 0, 1920, 1080), output_name),
     };
     let monitors = display.monitors();
     for i in 0..monitors.n_items() {
         if let Some(obj) = monitors.item(i) {
             if let Ok(monitor) = obj.downcast::<gdk::Monitor>() {
                 if monitor.connector().map(|s| s.to_string()).as_deref() == Some(&output_name) {
-                    let geom = monitor.geometry();
-                    let x = geom.x() + geom.width() - WINDOW_WIDTH - 10;
-                    let y = geom.y() + (geom.height() - WINDOW_HEIGHT) / 2;
-                    return (x, y);
+                    let g = monitor.geometry();
+                    return ((g.x(), g.y(), g.width(), g.height()), output_name);
                 }
             }
         }
     }
-    (0, 0)
+    ((0, 0, 1920, 1080), output_name)
 }
 
 fn get_focused_output() -> Option<String> {

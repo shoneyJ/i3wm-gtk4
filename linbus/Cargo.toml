@@ -1,0 +1,9 @@
+[package]
+name = "linbus"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal D-Bus library using Linux kernel primitives (epoll, Unix sockets, SCM_RIGHTS)"
+
+[dependencies]
+nix = { version = "0.29", features = ["net", "event", "socket", "uio", "process", "user"] }
+log = "0.4"

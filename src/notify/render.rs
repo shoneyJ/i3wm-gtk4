@@ -5,7 +5,7 @@ use std::sync::mpsc;
 
 use gtk4::glib;
 use gtk4::prelude::*;
-use zbus::zvariant::OwnedValue;
+use linbus::Value;
 
 use super::types::Notification;
 
@@ -123,7 +123,7 @@ fn is_valid_entity(entity: &str) -> bool {
 /// Priority: `image-data` hint -> `image-path` hint -> `app_icon` file path.
 /// Returns `None` for icon-theme names (caller falls back to `Image::from_icon_name`).
 pub fn extract_image(
-    hints: &HashMap<String, OwnedValue>,
+    hints: &HashMap<String, Value>,
     app_icon: &str,
 ) -> Option<gtk4::gdk::Texture> {
     // Try image-data hint (signature: iiibiiay)
@@ -135,7 +135,7 @@ pub fn extract_image(
 
     // Try image-path hint
     if let Some(image_path) = hints.get("image-path").or_else(|| hints.get("image_path")) {
-        if let Ok(path_str) = <&str>::try_from(image_path) {
+        if let Some(path_str) = image_path.as_str() {
             if let Ok(texture) = gtk4::gdk::Texture::from_file(&gtk4::gio::File::for_path(path_str)) {
                 return Some(texture);
             }
@@ -153,35 +153,31 @@ pub fn extract_image(
     None
 }
 
-fn parse_image_data(value: &OwnedValue) -> Option<gtk4::gdk::Texture> {
-    use zbus::zvariant::Value;
+fn parse_image_data(value: &Value) -> Option<gtk4::gdk::Texture> {
     use gtk4::gdk;
 
     // image-data is a struct (iiibiiay)
-    // OwnedValue derefs to Value<'static>
-    let structure = match &**value {
-        Value::Structure(s) => s,
-        _ => return None,
+    // Unwrap variant if needed
+    let inner = match value {
+        Value::Variant(v) => v.as_ref(),
+        other => other,
     };
 
-    let fields = structure.fields();
+    let fields = inner.as_struct_fields()?;
     if fields.len() < 7 {
         return None;
     }
 
-    let width = i32::try_from(&fields[0]).ok()?;
-    let height = i32::try_from(&fields[1]).ok()?;
-    let rowstride = i32::try_from(&fields[2]).ok()?;
-    let has_alpha = bool::try_from(&fields[3]).ok()?;
-    let _bpp = i32::try_from(&fields[4]).ok()?;
-    let _channels = i32::try_from(&fields[5]).ok()?;
-    let data: Vec<u8> = if let Value::Array(arr) = &fields[6] {
-        arr.iter()
-            .filter_map(|v| u8::try_from(v).ok())
-            .collect()
-    } else {
-        return None;
-    };
+    let width = fields[0].as_i32()?;
+    let height = fields[1].as_i32()?;
+    let rowstride = fields[2].as_i32()?;
+    let has_alpha = fields[3].as_bool()?;
+    let _bpp = fields[4].as_i32()?;
+    let _channels = fields[5].as_i32()?;
+    let data: Vec<u8> = fields[6].as_array()?
+        .iter()
+        .filter_map(|v| v.as_u8())
+        .collect();
 
     if width <= 0 || height <= 0 || data.is_empty() {
         return None;

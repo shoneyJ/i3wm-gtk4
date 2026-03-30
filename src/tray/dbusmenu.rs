@@ -4,7 +4,7 @@
 use gtk4::gio;
 use gtk4::glib;
 use gtk4::prelude::*;
-use zbus::zvariant::OwnedValue;
+use linbus::Value;
 
 use std::collections::HashMap;
 
@@ -27,8 +27,8 @@ pub struct MenuItem {
 impl MenuItem {
     fn from_layout(
         id: i32,
-        props: &HashMap<String, OwnedValue>,
-        children_raw: &[OwnedValue],
+        props: &HashMap<String, Value>,
+        children_raw: &[Value],
     ) -> Self {
         let label = prop_string(props, "label").unwrap_or_default();
         let enabled = prop_bool(props, "enabled").unwrap_or(true);
@@ -54,72 +54,57 @@ impl MenuItem {
     }
 }
 
-fn prop_string(props: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
-    props
-        .get(key)
-        .and_then(|v| v.downcast_ref::<String>().ok())
+fn prop_string(props: &HashMap<String, Value>, key: &str) -> Option<String> {
+    props.get(key).and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
-fn prop_bool(props: &HashMap<String, OwnedValue>, key: &str) -> Option<bool> {
-    props.get(key).and_then(|v| v.downcast_ref::<bool>().ok())
+fn prop_bool(props: &HashMap<String, Value>, key: &str) -> Option<bool> {
+    props.get(key).and_then(|v| v.as_bool())
 }
 
-fn prop_i32(props: &HashMap<String, OwnedValue>, key: &str) -> Option<i32> {
-    props.get(key).and_then(|v| v.downcast_ref::<i32>().ok())
+fn prop_i32(props: &HashMap<String, Value>, key: &str) -> Option<i32> {
+    props.get(key).and_then(|v| v.as_i32())
 }
 
 /// Parse an array of children from the GetLayout response.
 /// Each child is a struct `(i, a{sv}, av)` encoded as a Value.
-fn parse_children(children_raw: &[OwnedValue]) -> Vec<MenuItem> {
+fn parse_children(children_raw: &[Value]) -> Vec<MenuItem> {
     let mut items = Vec::new();
     for child_val in children_raw {
-        // Each child is wrapped in a variant; unwrap the Structure (i, a{sv}, av)
-        let structure = match child_val.downcast_ref::<zbus::zvariant::Structure>() {
-            Ok(s) => s,
-            Err(_) => {
-                log::debug!("DBusMenu: child is not a Structure");
+        // Each child may be wrapped in a variant
+        let inner = match child_val {
+            Value::Variant(v) => v.as_ref(),
+            other => other,
+        };
+
+        let fields = match inner.as_struct_fields() {
+            Some(f) => f,
+            None => {
+                log::debug!("DBusMenu: child is not a Struct");
                 continue;
             }
         };
 
-        let fields = structure.fields();
         if fields.len() < 3 {
-            log::debug!(
-                "DBusMenu: structure has {} fields, expected 3",
-                fields.len()
-            );
+            log::debug!("DBusMenu: struct has {} fields, expected 3", fields.len());
             continue;
         }
 
-        let id: i32 = match fields[0].downcast_ref::<i32>() {
-            Ok(v) => v,
-            Err(_) => continue,
+        let id = match fields[0].as_i32() {
+            Some(v) => v,
+            None => continue,
         };
 
-        // Parse properties dict a{sv} via zvariant Dict
-        let props: HashMap<String, OwnedValue> = match fields[1]
-            .downcast_ref::<zbus::zvariant::Dict>()
-        {
-            Ok(dict) => match dict.try_clone() {
-                Ok(owned_dict) => {
-                    <HashMap<String, OwnedValue>>::try_from(owned_dict)
-                        .unwrap_or_default()
-                }
-                Err(_) => HashMap::new(),
-            }
-            Err(_) => HashMap::new(),
-        };
+        // Parse properties dict a{sv}
+        let props: HashMap<String, Value> = fields[1]
+            .to_string_dict()
+            .unwrap_or_default();
 
-        // Parse children array av via zvariant Array
-        let sub_children: Vec<OwnedValue> = match fields[2]
-            .downcast_ref::<zbus::zvariant::Array>()
-        {
-            Ok(arr) => arr
-                .iter()
-                .filter_map(|v| v.try_to_owned().ok())
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        // Parse children array av
+        let sub_children: Vec<Value> = fields[2]
+            .as_array()
+            .map(|arr| arr.to_vec())
+            .unwrap_or_default();
 
         items.push(MenuItem::from_layout(id, &props, &sub_children));
     }
@@ -127,40 +112,63 @@ fn parse_children(children_raw: &[OwnedValue]) -> Vec<MenuItem> {
 }
 
 /// Fetch the full menu layout from a DBusMenu service.
-async fn get_layout(
-    conn: &zbus::Connection,
+fn get_layout(
+    conn: &mut linbus::Connection,
     bus_name: &str,
     menu_path: &str,
-) -> Result<MenuItem, zbus::Error> {
-    let proxy =
-        zbus::Proxy::new(conn, bus_name, menu_path, "com.canonical.dbusmenu").await?;
+) -> Result<MenuItem, linbus::LinbusError> {
+    let mut proxy = linbus::Proxy::new(conn, bus_name, menu_path, "com.canonical.dbusmenu");
 
     // GetLayout(parentId: i, recursionDepth: i, propertyNames: as) -> (u, (ia{sv}av))
-    let result: (u32, (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>)) = proxy
-        .call("GetLayout", &(0i32, -1i32, Vec::<String>::new()))
-        .await?;
+    let result = proxy.call("GetLayout", vec![
+        Value::I32(0),
+        Value::I32(-1),
+        Value::TypedArray("s".into(), vec![]),
+    ])?;
 
-    let (_revision, (root_id, root_props, root_children)) = result;
+    // Response is a struct: (u32 revision, struct(i32 id, a{sv} props, av children))
+    // But it comes as individual body values: [u32, struct(...)]
+    let root_struct = result.get(1)
+        .or_else(|| result.first())
+        .ok_or_else(|| linbus::LinbusError::ProtocolError("empty GetLayout reply".into()))?;
+
+    let inner = match root_struct {
+        Value::Variant(v) => v.as_ref(),
+        other => other,
+    };
+
+    let fields = inner.as_struct_fields()
+        .ok_or_else(|| linbus::LinbusError::ProtocolError("GetLayout root not a struct".into()))?;
+
+    let root_id = fields.first().and_then(|v| v.as_i32()).unwrap_or(0);
+    let root_props = fields.get(1)
+        .and_then(|v| v.to_string_dict())
+        .unwrap_or_default();
+    let root_children: Vec<Value> = fields.get(2)
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.to_vec())
+        .unwrap_or_default();
+
     Ok(MenuItem::from_layout(root_id, &root_props, &root_children))
 }
 
 /// Send an event to a DBusMenu item (e.g. "clicked").
-async fn send_event(
-    conn: &zbus::Connection,
+fn send_event(
+    conn: &mut linbus::Connection,
     bus_name: &str,
     menu_path: &str,
     item_id: i32,
     event_id: &str,
-) -> Result<(), zbus::Error> {
-    let proxy =
-        zbus::Proxy::new(conn, bus_name, menu_path, "com.canonical.dbusmenu").await?;
+) -> Result<(), linbus::LinbusError> {
+    let mut proxy = linbus::Proxy::new(conn, bus_name, menu_path, "com.canonical.dbusmenu");
 
     // Event(id: i, eventId: s, data: v, timestamp: u)
-    let data = zbus::zvariant::Value::I32(0);
-    let timestamp = 0u32;
-    let _: () = proxy
-        .call("Event", &(item_id, event_id, &data, timestamp))
-        .await?;
+    let _: Vec<Value> = proxy.call("Event", vec![
+        Value::I32(item_id),
+        Value::String(event_id.into()),
+        Value::Variant(Box::new(Value::I32(0))),
+        Value::U32(0),
+    ])?;
     Ok(())
 }
 
@@ -213,20 +221,16 @@ fn build_gio_menu(
                 let path = path.clone();
                 glib::spawn_future_local(async move {
                     let _ = std::thread::spawn(move || {
-                        async_io::block_on(async {
-                            let conn = match zbus::Connection::session().await {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    log::warn!("DBusMenu event connect failed: {}", e);
-                                    return;
-                                }
-                            };
-                            if let Err(e) =
-                                send_event(&conn, &bus, &path, id, "clicked").await
-                            {
-                                log::warn!("DBusMenu Event call failed: {}", e);
+                        let mut conn = match linbus::Connection::session() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                log::warn!("DBusMenu event connect failed: {}", e);
+                                return;
                             }
-                        });
+                        };
+                        if let Err(e) = send_event(&mut conn, &bus, &path, id, "clicked") {
+                            log::warn!("DBusMenu Event call failed: {}", e);
+                        }
                     })
                     .join();
                 });
@@ -257,16 +261,15 @@ pub fn show_menu(widget: &gtk4::Box, id: &TrayItemId, menu_path: &str) {
         let path = menu_object_path.clone();
 
         let result = std::thread::spawn(move || {
-            async_io::block_on(async {
-                let conn = zbus::Connection::session().await?;
-                get_layout(&conn, &bus, &path).await
-            })
+            let mut conn = linbus::Connection::session()?;
+            get_layout(&mut conn, &bus, &path)
         })
         .join();
 
         let root = match result {
             Ok(Ok(root)) => root,
             Ok(Err(e)) => {
+                eprintln!("[dbusmenu] GetLayout failed: {}", e);
                 log::warn!("DBusMenu GetLayout failed: {}", e);
                 return;
             }

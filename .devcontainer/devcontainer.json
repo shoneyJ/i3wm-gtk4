@@ -1,0 +1,32 @@
+{
+    "name": "i3More Dev",
+    "dockerComposeFile": "../docker-compose.yaml",
+    "service": "dev",
+    "workspaceFolder": "/app",
+
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb",
+                "tamasfe.even-better-toml",
+                "serayuzgur.crates"
+            ],
+            "settings": {
+                "rust-analyzer.cargo.buildScripts.enable": true,
+                "rust-analyzer.procMacro.enable": true,
+                "lldb.library": "/usr/lib/x86_64-linux-gnu/liblldb-18.so",
+                "lldb.adapterEnv": {
+                    "LLDB_DEBUGSERVER_PATH": "/usr/bin/lldb-server-18"
+                }
+            }
+        }
+    },
+
+    "remoteEnv": {
+        "DISPLAY": ":99",
+        "RUST_BACKTRACE": "1"
+    },
+
+    "postStartCommand": "Xvfb :99 -screen 0 1920x1080x24 &"
+}

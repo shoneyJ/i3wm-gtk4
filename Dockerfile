@@ -38,7 +38,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   xvfb \
   xdotool \
   xauth \
+  # Debugging: LLDB + GDB for container debug sessions
+  lldb \
+  gdb \
+  # Tracing: strace for syscall inspection (epoll, socket, mount, clone)
+  strace \
   && rm -rf /var/lib/apt/lists/*
+
+# Symlink versioned LLDB binaries so CodeLLDB extension finds them
+RUN ln -sf /usr/bin/lldb-server-18 /usr/bin/lldb-server \
+ && ln -sf /usr/bin/lldb-18 /usr/bin/lldb \
+ && ln -sf /usr/lib/x86_64-linux-gnu/liblldb-18.so /usr/lib/liblldb.so
 
 # Test PAM service: always-accept auth (used by integration tests only)
 RUN echo "auth    required  pam_permit.so" > /etc/pam.d/i3more-lock-test \

@@ -4,198 +4,205 @@
 /// incoming notification requests from applications.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::SystemTime;
 
-use zbus::object_server::SignalEmitter;
-use zbus::{connection, interface};
-use zbus::zvariant::OwnedValue;
+use linbus::{Connection, Dispatcher, Value};
 
 use super::types::{Notification, NotifyEvent};
 
-/// The notification daemon D-Bus object, served at /org/freedesktop/Notifications.
-pub struct NotificationDaemon {
-    next_id: Arc<Mutex<u32>>,
-    tx: mpsc::Sender<NotifyEvent>,
-    /// Maps x-canonical-private-synchronous hint values to notification IDs,
-    /// so that volume/brightness notifications replace the previous one.
-    sync_keys: Arc<Mutex<HashMap<String, u32>>>,
-}
-
-#[interface(name = "org.freedesktop.Notifications")]
-impl NotificationDaemon {
-    /// Returns the capabilities of this notification server.
-    fn get_capabilities(&self) -> Vec<String> {
-        vec![
-            "body".to_string(),
-            "body-hyperlinks".to_string(),
-            "body-images".to_string(),
-            "body-markup".to_string(),
-            "icon-static".to_string(),
-            "persistence".to_string(),
-            "actions".to_string(),
-        ]
-    }
-
-    /// Sends a notification to the server.
-    fn notify(
-        &self,
-        app_name: &str,
-        replaces_id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: Vec<String>,
-        hints: HashMap<String, OwnedValue>,
-        expire_timeout: i32,
-    ) -> u32 {
-        // Check for x-canonical-private-synchronous hint (used by volume/brightness scripts).
-        // If present, reuse the previous notification ID for that sync key.
-        let sync_key = hints.get("x-canonical-private-synchronous")
-            .and_then(|v| <&str>::try_from(v).ok())
-            .map(|s| s.to_string());
-
-        let effective_replaces = if replaces_id > 0 {
-            replaces_id
-        } else if let Some(ref key) = sync_key {
-            let sync_keys = self.sync_keys.lock().unwrap();
-            sync_keys.get(key).copied().unwrap_or(0)
-        } else {
-            0
-        };
-
-        let id = if effective_replaces > 0 {
-            effective_replaces
-        } else {
-            let mut next = self.next_id.lock().unwrap();
-            let id = *next;
-            *next = next.wrapping_add(1);
-            if *next == 0 {
-                *next = 1;
-            }
-            id
-        };
-
-        // Update sync key mapping
-        if let Some(key) = sync_key {
-            self.sync_keys.lock().unwrap().insert(key, id);
-        }
-
-        // Parse actions from flat [key, label, key, label, ...] into pairs
-        let action_pairs: Vec<(String, String)> = actions
-            .chunks(2)
-            .filter_map(|chunk| {
-                if chunk.len() == 2 {
-                    Some((chunk[0].clone(), chunk[1].clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let notification = Notification {
-            id,
-            app_name: app_name.to_string(),
-            app_icon: app_icon.to_string(),
-            summary: summary.to_string(),
-            body: body.to_string(),
-            actions: action_pairs,
-            hints,
-            expire_timeout,
-            timestamp: SystemTime::now(),
-        };
-
-        log::info!(
-            "Notification #{}: [{}] {} - {}",
-            id,
-            notification.app_name,
-            notification.summary,
-            notification.body
-        );
-
-        let _ = self.tx.send(NotifyEvent::New(notification));
-        id
-    }
-
-    /// Closes a notification by ID.
-    fn close_notification(&self, id: u32) {
-        log::info!("CloseNotification #{}", id);
-        let _ = self.tx.send(NotifyEvent::Close(id));
-    }
-
-    /// Returns server information.
-    fn get_server_information(&self) -> (String, String, String, String) {
-        (
-            "i3more".to_string(),
-            "i3more".to_string(),
-            "0.1.0".to_string(),
-            "1.2".to_string(),
-        )
-    }
-
-    /// Signal emitted when a notification is closed.
-    #[zbus(signal)]
-    async fn notification_closed(
-        emitter: &SignalEmitter<'_>,
-        id: u32,
-        reason: u32,
-    ) -> zbus::Result<()>;
-
-    /// Signal emitted when a notification action is invoked.
-    #[zbus(signal)]
-    async fn action_invoked(
-        emitter: &SignalEmitter<'_>,
-        id: u32,
-        action_key: &str,
-    ) -> zbus::Result<()>;
-}
-
 /// Start the notification daemon on a background thread.
-/// Returns an action sender for emitting ActionInvoked D-Bus signals.
-pub fn start_notification_daemon(tx: mpsc::Sender<NotifyEvent>) -> mpsc::Sender<(u32, String)> {
+/// Returns an action sender and a join handle for graceful shutdown.
+pub fn start_notification_daemon(
+    tx: mpsc::Sender<NotifyEvent>,
+    shutdown: Arc<AtomicBool>,
+) -> (mpsc::Sender<(u32, String)>, JoinHandle<()>) {
     let (action_tx, action_rx) = mpsc::channel::<(u32, String)>();
-    std::thread::spawn(move || {
-        async_io::block_on(async {
-            if let Err(e) = run_daemon(tx, action_rx).await {
-                log::error!("Notification daemon failed: {}", e);
-            }
-        });
+    let handle = std::thread::spawn(move || {
+        if let Err(e) = run_daemon(tx, action_rx, shutdown) {
+            eprintln!("Notification daemon failed: {}", e);
+            log::error!("Notification daemon failed: {}", e);
+        }
     });
-    action_tx
+    (action_tx, handle)
 }
 
-async fn run_daemon(
+fn run_daemon(
     tx: mpsc::Sender<NotifyEvent>,
     action_rx: mpsc::Receiver<(u32, String)>,
-) -> zbus::Result<()> {
-    let daemon = NotificationDaemon {
-        next_id: Arc::new(Mutex::new(1)),
-        tx,
-        sync_keys: Arc::new(Mutex::new(HashMap::new())),
-    };
-
-    let conn = connection::Builder::session()?
-        .name("org.freedesktop.Notifications")?
-        .serve_at("/org/freedesktop/Notifications", daemon)?
-        .build()
-        .await?;
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), linbus::LinbusError> {
+    let mut conn = Connection::session()?;
+    conn.request_name("org.freedesktop.Notifications")?;
 
     log::info!("Notification daemon active on session bus");
 
-    // Poll for action invocations and emit D-Bus signals
-    loop {
-        async_io::Timer::after(std::time::Duration::from_millis(50)).await;
-        while let Ok((id, action_key)) = action_rx.try_recv() {
-            log::info!("ActionInvoked #{}: {}", id, action_key);
-            let iface_ref = conn
-                .object_server()
-                .interface::<_, NotificationDaemon>("/org/freedesktop/Notifications")
-                .await
-                .expect("interface not found");
-            let emitter = iface_ref.signal_emitter();
-            if let Err(e) = NotificationDaemon::action_invoked(&emitter, id, &action_key).await {
-                log::error!("Failed to emit ActionInvoked signal: {}", e);
-            }
-        }
+    let next_id = Arc::new(Mutex::new(1u32));
+    let sync_keys: Arc<Mutex<HashMap<String, u32>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let mut dispatcher = Dispatcher::new(conn);
+    dispatcher.track_name("org.freedesktop.Notifications");
+
+    // Link external shutdown flag to dispatcher stop
+    let stop = dispatcher.stop_handle();
+    let shutdown_check = shutdown.clone();
+
+
+    // GetCapabilities
+    dispatcher.add_handler(
+        "org.freedesktop.Notifications",
+        "GetCapabilities",
+        Box::new(|_msg| {
+            Ok(vec![Value::Array(vec![
+                Value::String("body".into()),
+                Value::String("body-hyperlinks".into()),
+                Value::String("body-images".into()),
+                Value::String("body-markup".into()),
+                Value::String("icon-static".into()),
+                Value::String("persistence".into()),
+                Value::String("actions".into()),
+            ])])
+        }),
+    );
+
+    // GetServerInformation
+    dispatcher.add_handler(
+        "org.freedesktop.Notifications",
+        "GetServerInformation",
+        Box::new(|_msg| {
+            Ok(vec![
+                Value::String("i3more".into()),
+                Value::String("i3more".into()),
+                Value::String("0.1.0".into()),
+                Value::String("1.2".into()),
+            ])
+        }),
+    );
+
+    // CloseNotification
+    {
+        let tx = tx.clone();
+        dispatcher.add_handler(
+            "org.freedesktop.Notifications",
+            "CloseNotification",
+            Box::new(move |msg| {
+                let id = msg.body.first().and_then(|v| v.as_u32()).unwrap_or(0);
+                log::info!("CloseNotification #{}", id);
+                let _ = tx.send(NotifyEvent::Close(id));
+                Ok(vec![])
+            }),
+        );
     }
+
+    // Notify
+    {
+        let tx = tx.clone();
+        let next_id = next_id.clone();
+        let sync_keys = sync_keys.clone();
+        dispatcher.add_handler(
+            "org.freedesktop.Notifications",
+            "Notify",
+            Box::new(move |msg| {
+                let body = &msg.body;
+                let app_name = body.first().and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let replaces_id = body.get(1).and_then(|v| v.as_u32()).unwrap_or(0);
+                let app_icon = body.get(2).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let summary = body.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let body_text = body.get(4).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                // Actions: flat array [key, label, key, label, ...]
+                let actions_raw: Vec<String> = body.get(5)
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+
+                // Hints: a{sv}
+                let hints: HashMap<String, linbus::Value> = body.get(6)
+                    .and_then(|v| v.to_string_dict())
+                    .unwrap_or_default();
+
+                let expire_timeout = body.get(7).and_then(|v| v.as_i32()).unwrap_or(-1);
+
+                // Check for x-canonical-private-synchronous hint
+                let sync_key = hints.get("x-canonical-private-synchronous")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let effective_replaces = if replaces_id > 0 {
+                    replaces_id
+                } else if let Some(ref key) = sync_key {
+                    sync_keys.lock().unwrap().get(key).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+
+                let id = if effective_replaces > 0 {
+                    effective_replaces
+                } else {
+                    let mut next = next_id.lock().unwrap();
+                    let id = *next;
+                    *next = next.wrapping_add(1);
+                    if *next == 0 { *next = 1; }
+                    id
+                };
+
+                if let Some(key) = sync_key {
+                    sync_keys.lock().unwrap().insert(key, id);
+                }
+
+                let action_pairs: Vec<(String, String)> = actions_raw
+                    .chunks(2)
+                    .filter_map(|chunk| {
+                        if chunk.len() == 2 {
+                            Some((chunk[0].clone(), chunk[1].clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let notification = Notification {
+                    id,
+                    app_name: app_name.clone(),
+                    app_icon,
+                    summary: summary.clone(),
+                    body: body_text.clone(),
+                    actions: action_pairs,
+                    hints,
+                    expire_timeout,
+                    timestamp: SystemTime::now(),
+                };
+
+                log::info!("Notification #{}: [{}] {} - {}", id, app_name, summary, body_text);
+                let _ = tx.send(NotifyEvent::New(notification));
+
+                Ok(vec![Value::U32(id)])
+            }),
+        );
+    }
+
+    // Run the event loop
+    dispatcher.run(
+        50,
+        |d| {
+            if shutdown_check.load(Ordering::Relaxed) {
+                stop.store(true, Ordering::Relaxed);
+            }
+            // Poll action_rx and emit ActionInvoked signals
+            while let Ok((id, action_key)) = action_rx.try_recv() {
+                log::info!("ActionInvoked #{}: {}", id, action_key);
+                if let Err(e) = d.emit_signal(
+                    "/org/freedesktop/Notifications",
+                    "org.freedesktop.Notifications",
+                    "ActionInvoked",
+                    &[Value::U32(id), Value::String(action_key)],
+                ) {
+                    log::error!("Failed to emit ActionInvoked: {}", e);
+                }
+            }
+        },
+        |_signal| {}, // no signals to handle
+    )
 }
