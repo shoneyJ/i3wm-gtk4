@@ -200,3 +200,201 @@ dist/i3more-power profiles # rofi shows current profile, select one
 xss-lock -l -- dist/i3more-power lock &
 # Close laptop lid → screen locks with blur
 ```
+
+## Graceful Shutdown
+
+### Background: Linux Shutdown Sequence
+
+When a shutdown is initiated (via `systemctl poweroff`, power menu, etc.), the sequence is:
+
+1. **logind receives request** — `org.freedesktop.login1.Manager.PowerOff()` via D-Bus
+2. **Inhibitor lock check** — apps can hold delay-type locks to postpone briefly (e.g., during downloads/upgrades)
+3. **Session manager notifies apps** — EndSession D-Bus signal, ~10s grace period for apps to save state
+4. **systemd activates `poweroff.target`** — walks unit dependency graph in reverse (dependents stop first)
+5. **Services get SIGTERM, then SIGKILL** — `TimeoutStopSec=90s` default wait before forced kill
+6. **Network teardown** — DHCP release, VPN close, interface down
+7. **Filesystem unmount** — page cache flush, journal commit, remount root read-only
+8. **Kernel `reboot(RB_POWER_OFF)`** → ACPI S5 state → power off
+
+### Critical Finding: i3 Does NOT Signal Child Processes
+
+i3 calls `exit()` directly on `i3-msg exit`. It double-forks with `setsid()` for every `exec` command, so children are in their own session group and receive **no signal** from i3.
+
+What actually kills i3more processes:
+
+| Launch method | What terminates the process |
+|---|---|
+| `exec` in i3 config (startx/xinit) | X server dies → GTK gets X11 I/O error → crash |
+| `exec` in i3 config (display manager) | PAM session cleanup may send SIGTERM, but X usually dies first |
+| systemd user service | SIGTERM with configurable timeout, then SIGKILL |
+
+The i3 IPC `shutdown` event exists but fires during `exit()` cleanup — the socket closes immediately after, so it's unreliable as a notification mechanism.
+
+### Current State: No Shutdown Handling
+
+All i3more binaries exit abruptly. No signal handlers, no thread termination, no cleanup. The `nix` crate with `signal` feature is a dependency but unused.
+
+**Resources at risk:**
+
+| Resource | Component | Risk | Cleanup needed? |
+|---|---|---|---|
+| D-Bus service names | notify daemon, tray watcher | None — auto-released by bus daemon | No |
+| X11 grabs (keyboard/pointer) | lock screen | Auto-released by kernel | No |
+| X11 cover windows | lock screen | May remain visible on crash | **Yes** |
+| i3 IPC socket read | event listener thread | Thread hangs on blocking read | **Yes** |
+| Child processes (`pactl subscribe`) | audio widget | May orphan | **Yes** |
+| Notification history | notify daemon | In-memory, lost on exit | Optional |
+| Temp files (blur screenshots) | lock screen | Leaked on crash | Minor — `/tmp` clears on reboot |
+| Debounce `glib::SourceId` timers | main navigator | Stale IDs | Auto-removed by GTK |
+
+### Implementation Plan
+
+#### Signal Handling: `glib::source::unix_signal_add()`
+
+GLib provides native UNIX signal integration into the GTK main loop. It writes to a pipe from the raw signal handler (async-signal-safe), then dispatches the closure on the main thread where GTK/allocator calls are safe.
+
+Do NOT use raw `nix::signal` handlers — they cannot safely call GTK or Rust allocator functions (only async-signal-safe calls allowed in raw handlers).
+
+```rust
+// In main(), after app is built but before app.run()
+let app_clone = app.clone();
+glib::source::unix_signal_add(libc::SIGTERM, move || {
+    log::info!("Received SIGTERM, shutting down");
+    app_clone.quit();
+    glib::ControlFlow::Break
+});
+
+let app_clone = app.clone();
+glib::source::unix_signal_add(libc::SIGINT, move || {
+    log::info!("Received SIGINT, shutting down");
+    app_clone.quit();
+    glib::ControlFlow::Break
+});
+```
+
+Requires: `libc` crate (add to `Cargo.toml` if not present, or use `nix::libc`).
+
+#### Shutdown Hook: `app.connect_shutdown()`
+
+GTK4's `Application::shutdown` signal fires synchronously on the main thread after the main loop exits but before `run()` returns. This is where cleanup happens.
+
+```rust
+app.connect_shutdown(move |_app| {
+    log::info!("Application shutdown signal received");
+    SHUTDOWN.store(true, Ordering::Relaxed);
+    // Drop receivers to signal channel-based threads
+    // Optionally join threads with timeout
+});
+```
+
+#### Thread Termination: Shared `AtomicBool` + Channel Close
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+```
+
+**i3 event listener** — already handles channel close correctly:
+```rust
+// Existing code in start_event_listener:
+// tx.send(event) returns Err when receiver is dropped → breaks loop
+// Additionally check SHUTDOWN flag for the blocking socket read case
+if SHUTDOWN.load(Ordering::Relaxed) { break; }
+```
+
+**Notification daemon** — add check to existing 50ms polling loop:
+```rust
+// In run_daemon() loop body:
+if SHUTDOWN.load(Ordering::Relaxed) { break; }
+async_io::Timer::after(Duration::from_millis(50)).await;
+```
+
+**Tray watcher** — the loader task polls every 500ms, add check there:
+```rust
+// In loader_task loop body:
+if SHUTDOWN.load(Ordering::Relaxed) { break; }
+async_io::Timer::after(Duration::from_millis(500)).await;
+```
+
+The stream task (`stream.next().await`) will return `None` when the D-Bus connection closes on process exit — no change needed.
+
+#### Shutdown Sequence
+
+```
+SIGTERM/SIGINT arrives (or X11 connection dies)
+  → glib::unix_signal_add closure fires on GTK main thread
+  → calls app.quit()
+  → GTK main loop exits
+  → app.connect_shutdown() fires
+    → SHUTDOWN.store(true, Relaxed)
+    → drop mpsc receivers (signals i3 event thread via SendError)
+    → optionally join threads with 2s timeout
+  → app.run() returns to main()
+  → Rust Drop impls run
+    → zbus Connection dropped → D-Bus names auto-released by bus daemon
+  → process exits cleanly
+```
+
+#### Files to Modify
+
+| File | Change |
+|---|---|
+| `src/main.rs` | Add `SHUTDOWN` AtomicBool, signal handlers, `connect_shutdown`, thread join |
+| `src/notify/daemon.rs` | Check `SHUTDOWN` flag in polling loop |
+| `src/tray/watcher.rs` | Check `SHUTDOWN` flag in loader task loop |
+| `src/lock/x11.rs` | Check `SHUTDOWN` flag; call `destroy_covers()` on exit |
+| `src/lock_main.rs` | Add signal handlers (same pattern as main) |
+| `Cargo.toml` | Add `libc` dependency if not already present |
+
+#### D-Bus Cleanup: Not Required
+
+The D-Bus specification guarantees name release when the connection file descriptor closes, regardless of how the process exits (clean shutdown, crash, or SIGKILL). No explicit `release_name()` call is needed.
+
+zbus `Connection` behavior on drop: spawns `graceful_shutdown()` in the background, which waits for outstanding method calls to complete before closing the socket. This is sufficient.
+
+#### Optional: systemd User Service
+
+For users who want ordered shutdown with SIGTERM, restart-on-crash, and journalctl logging. Requires manual setup because i3 does not activate `graphical-session.target`.
+
+**`~/.config/systemd/user/i3-session.target`:**
+```ini
+[Unit]
+Description=i3 session
+BindsTo=graphical-session.target
+```
+
+**`~/.config/systemd/user/i3more.service`:**
+```ini
+[Unit]
+Description=i3more panel
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/i3more
+Restart=on-failure
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+**i3 config addition:**
+```bash
+exec --no-startup-id systemctl --user import-environment DISPLAY XAUTHORITY I3SOCK
+exec --no-startup-id systemctl --user start i3-session.target
+```
+
+Trade-off: adds 3 files of setup complexity but gives proper lifecycle management. Keep `exec` from i3 config as the default; provide systemd files as an optional alternative.
+
+#### Lock Screen: Additional Considerations
+
+The lock screen (`i3more-lock`) has higher-stakes cleanup requirements than other binaries:
+
+- **Cover windows**: Must call `destroy_covers()` before exit to avoid black rectangles persisting on screen after crash
+- **X11 grabs**: Auto-released by kernel, but releasing explicitly is cleaner
+- **VT switch inhibitor**: Auto-released when logind D-Bus connection closes
+- **Password buffer**: Already uses `Zeroizing<String>` — secure on drop
+
+The lock screen should treat `SIGTERM` during active lock as: release grabs → destroy covers → exit. Do NOT unlock on SIGTERM — that would be a security issue. The fallback `i3lock` spawn on error already handles the crash case.

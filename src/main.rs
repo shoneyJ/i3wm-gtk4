@@ -20,6 +20,7 @@ use navigator::NavigatorState;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use notify::types::NotifyEvent;
 use tray::types::{TrayEvent, TrayItemId, TrayItemProps};
@@ -45,6 +46,27 @@ fn main() {
     let app = gtk4::Application::builder()
         .application_id("com.i3more.navigator")
         .build();
+
+    // Install SIGTERM/SIGINT handlers — dispatched on the GTK main thread via GLib.
+    // Use unix_signal_add_local because gtk4::Application is not Send.
+    let app_term = app.clone();
+    glib::source::unix_signal_add_local(libc::SIGTERM, move || {
+        log::info!("Received SIGTERM, shutting down");
+        app_term.quit();
+        glib::ControlFlow::Break
+    });
+    let app_int = app.clone();
+    glib::source::unix_signal_add_local(libc::SIGINT, move || {
+        log::info!("Received SIGINT, shutting down");
+        app_int.quit();
+        glib::ControlFlow::Break
+    });
+
+    // Cleanup hook — fires after main loop exits but before run() returns
+    app.connect_shutdown(|_| {
+        log::info!("Application shutdown: setting shutdown flag");
+        i3more::SHUTDOWN.store(true, Ordering::Relaxed);
+    });
 
     app.connect_activate(on_activate);
     app.run();
@@ -374,8 +396,12 @@ fn query_initial_state() -> Result<(serde_json::Value, serde_json::Value, Vec<St
 fn start_event_listener(tx: mpsc::Sender<I3Event>) {
     std::thread::spawn(move || {
         loop {
+            if i3more::shutdown_requested() {
+                log::info!("Event listener: shutdown requested, exiting");
+                break;
+            }
             match listen_events(&tx) {
-                Ok(()) => break, // Clean shutdown
+                Ok(()) => break, // Clean shutdown (channel closed)
                 Err(e) => {
                     log::error!("i3 event listener error: {}. Reconnecting in 2s...", e);
                     std::thread::sleep(std::time::Duration::from_secs(2));

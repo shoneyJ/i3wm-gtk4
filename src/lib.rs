@@ -8,6 +8,15 @@ pub mod launcher;
 pub mod translate;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global shutdown flag. Background threads check this to exit cleanly.
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Returns true if a graceful shutdown has been requested.
+pub fn shutdown_requested() -> bool {
+    SHUTDOWN.load(Ordering::Relaxed)
+}
 
 /// Initialize file-based logging for an i3More binary.
 ///

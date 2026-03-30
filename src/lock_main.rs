@@ -27,6 +27,23 @@ fn main() {
         .application_id("com.i3more.lock")
         .build();
 
+    // Security: SIGTERM/SIGINT must NOT unlock the screen.
+    // Log the signal but do not call app.quit(). Only PAM auth can unlock.
+    glib::source::unix_signal_add_local(libc::SIGTERM, || {
+        log::warn!("Lock screen received SIGTERM — ignoring (only PAM auth can unlock)");
+        glib::ControlFlow::Continue
+    });
+    glib::source::unix_signal_add_local(libc::SIGINT, || {
+        log::warn!("Lock screen received SIGINT — ignoring (only PAM auth can unlock)");
+        glib::ControlFlow::Continue
+    });
+
+    // Set shutdown flag when app quits (after successful PAM auth)
+    app.connect_shutdown(|_| {
+        log::info!("Lock screen shutdown: setting shutdown flag for thread cleanup");
+        i3more::SHUTDOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+
     app.connect_activate(on_activate);
     app.run();
 }

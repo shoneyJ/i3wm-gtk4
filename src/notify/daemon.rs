@@ -184,6 +184,10 @@ async fn run_daemon(
 
     // Poll for action invocations and emit D-Bus signals
     loop {
+        if i3more::shutdown_requested() {
+            log::info!("Notification daemon: shutdown requested, exiting");
+            break Ok(());
+        }
         async_io::Timer::after(std::time::Duration::from_millis(50)).await;
         while let Ok((id, action_key)) = action_rx.try_recv() {
             log::info!("ActionInvoked #{}: {}", id, action_key);

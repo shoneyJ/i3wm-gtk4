@@ -64,3 +64,4 @@ x11rb = { version = "0.13", features = ["randr"] }
 zeroize = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["process", "signal"] }
 pam-client = "0.5"
+libc = "0.2"

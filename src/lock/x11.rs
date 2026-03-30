@@ -64,6 +64,13 @@ pub fn run(
     let mut last_grab_refresh = std::time::Instant::now();
 
     loop {
+        // Check if the application is shutting down (successful PAM auth)
+        if i3more::shutdown_requested() {
+            log::info!("X11 input loop: shutdown requested, destroying covers");
+            destroy_covers(&conn, &covers);
+            return Ok(());
+        }
+
         // Drain all pending X11 events
         while let Some(event) = conn.poll_for_event()? {
             if let x11rb::protocol::Event::KeyPress(ev) = event {

@@ -185,6 +185,10 @@ async fn monitor_name_changes(
     let loader_task = async move {
         let mut known_loaded: HashSet<TrayItemId> = HashSet::new();
         loop {
+            if i3more::shutdown_requested() {
+                log::info!("Tray loader: shutdown requested, exiting");
+                break;
+            }
             async_io::Timer::after(std::time::Duration::from_millis(500)).await;
 
             let current_items: Vec<TrayItemId> =

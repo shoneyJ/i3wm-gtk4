@@ -932,6 +932,7 @@ dependencies = [
  "futures-util",
  "gdk4-x11",
  "gtk4",
+ "libc",
  "log",
  "lru",
  "nix",
