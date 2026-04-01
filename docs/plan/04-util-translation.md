@@ -148,6 +148,14 @@ killall i3more-translate 2>/dev/null; docker compose run --rm dev bash -c "cargo
 
 ### popup-translation
 
+```bash
+src/popup_translate_main.rs
+```
+
 - When user selects a text on a window, then with a shortcut key, a popup opens right above where the selection ended.
   The popup should show a translated text.
 - search gtk4 submodule for this feature implementation.
+- currently the popup translate closes in 5 secs.
+  - New requirement
+    - When user hover the popup the timer to close the popup should pause.
+    - The timer to close the popup must resume once focus is away from the popup window.

@@ -5,9 +5,12 @@
 
 use gtk4::glib;
 use gtk4::prelude::*;
+use std::cell::Cell;
+use std::rc::Rc;
 
 const POPUP_WIDTH: i32 = 300;
 const DISMISS_MS: u64 = 5000;
+const TICK_MS: u64 = 100;
 
 fn main() {
     i3more::init_logging("i3more-popup-translate");
@@ -101,6 +104,20 @@ fn main() {
 
         window.set_child(Some(&vbox));
 
+        // Hover-aware dismiss: pause timer while mouse is over the popup.
+        let hovered = Rc::new(Cell::new(false));
+
+        let hover_ctrl = gtk4::EventControllerMotion::new();
+        let h = hovered.clone();
+        hover_ctrl.connect_enter(move |_, _, _| {
+            h.set(true);
+        });
+        let h = hovered.clone();
+        hover_ctrl.connect_leave(move |_| {
+            h.set(false);
+        });
+        window.add_controller(hover_ctrl);
+
         // Capture focused window to restore focus after popup maps.
         let focused_xid = std::process::Command::new("xdotool")
             .args(["getactivewindow"])
@@ -166,12 +183,22 @@ fn main() {
                         }
                     }
 
-                    // Auto-dismiss after result.
+                    // Auto-dismiss timer: ticks down, pauses while hovered.
+                    let remaining = Rc::new(Cell::new(DISMISS_MS));
                     let w = win.clone();
-                    glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(DISMISS_MS),
+                    let h = hovered.clone();
+                    glib::timeout_add_local(
+                        std::time::Duration::from_millis(TICK_MS),
                         move || {
-                            w.close();
+                            if !h.get() {
+                                let left = remaining.get().saturating_sub(TICK_MS);
+                                remaining.set(left);
+                                if left == 0 {
+                                    w.close();
+                                    return glib::ControlFlow::Break;
+                                }
+                            }
+                            glib::ControlFlow::Continue
                         },
                     );
 
