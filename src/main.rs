@@ -6,6 +6,7 @@
 mod control_panel;
 mod fa;
 mod ipc;
+mod mic_indicator;
 mod model;
 mod navigator;
 mod notify;
@@ -138,7 +139,7 @@ fn on_activate(app: &gtk4::Application) {
     // Set up notification daemon
     let (notify_tx, notify_rx) = mpsc::channel::<NotifyEvent>();
     let notify_close_tx = notify_tx.clone();
-    let action_tx = notify::start_notification_daemon(notify_tx);
+    let (action_tx, close_signal_tx) = notify::start_notification_daemon(notify_tx);
 
     i3more::css::load_css("notification.css", include_str!("../assets/notification.css"));
     let popup_manager = Rc::new(notify::popup::PopupManager::new(app, notify_close_tx, action_tx));
@@ -316,6 +317,7 @@ fn on_activate(app: &gtk4::Application) {
                 }
                 NotifyEvent::Close(id) => {
                     popup_mgr.dismiss(id);
+                    let _ = close_signal_tx.send(id);
                 }
                 NotifyEvent::ActionInvoked(_, _) => {
                     // Actions flow directly via action_tx, not through this channel

@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -150,6 +151,18 @@ fn filter_devices(
                 }
             }
         }
+        // Always include Bluetooth devices — they are explicitly paired by
+        // the user and should be selectable regardless of preferred patterns.
+        for device in &devices {
+            if device.name.starts_with("bluez_")
+                && !result.iter().any(|d| d.name == device.name)
+            {
+                result.push(DeviceInfo {
+                    name: device.name.clone(),
+                    description: device.description.clone(),
+                });
+            }
+        }
         result
     } else if !excluded.is_empty() {
         devices
@@ -202,11 +215,299 @@ fn notify_device_change(summary: &str, body: &str) {
         .spawn();
 }
 
+/// Prevents multiple headset popups from overlapping.
+static HEADSET_POPUP_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Check if a source name indicates an analog jack (headset candidate).
+fn is_analog_source(name: &str, desc: &str) -> bool {
+    let name_l = name.to_lowercase();
+    let desc_l = desc.to_lowercase();
+    name_l.contains("analog") || name_l.contains("headset")
+        || desc_l.contains("headset") || desc_l.contains("headphone")
+}
+
+/// Find the card name and a profile with both analog output and input.
+fn resolve_analog_card() -> Option<(String, String)> {
+    let output = std::process::Command::new("pactl")
+        .args(["--format=json", "list", "cards"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let cards: Vec<serde_json::Value> = serde_json::from_str(&text).ok()?;
+
+    for card in &cards {
+        let card_name = card.get("name")?.as_str()?;
+        if let Some(profiles) = card.get("profiles").and_then(|p| p.as_object()) {
+            for (key, val) in profiles {
+                let profile_name = val
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or(key.as_str());
+                let pn = profile_name.to_lowercase();
+                // Match profiles with both analog output and input
+                if (pn.contains("output") && pn.contains("input") && pn.contains("analog"))
+                    || pn.contains("headset")
+                {
+                    return Some((card_name.to_string(), profile_name.to_string()));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Send a D-Bus notification with action buttons directly via gdbus.
+/// Returns the notification ID, or 0 on failure.
+/// Uses gdbus instead of notify-send to bypass libnotify portal interception.
+fn send_action_notification(summary: &str, body: &str, icon: &str, timeout_ms: i32,
+                            actions: &[(&str, &str)]) -> u32 {
+    let actions_str: Vec<String> = actions.iter()
+        .flat_map(|(key, label)| [format!("'{}'", key), format!("'{}'", label)])
+        .collect();
+    let actions_arg = format!("[{}]", actions_str.join(", "));
+
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call", "--session",
+            "--dest", "org.freedesktop.Notifications",
+            "--object-path", "/org/freedesktop/Notifications",
+            "--method", "org.freedesktop.Notifications.Notify",
+            "i3more", "0", icon, summary, body,
+            &actions_arg, "{}", &timeout_ms.to_string(),
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            // Parse "(uint32 N,)" from stdout
+            let text = String::from_utf8_lossy(&o.stdout);
+            text.trim()
+                .trim_start_matches("(uint32 ")
+                .trim_end_matches(",)")
+                .parse::<u32>()
+                .unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// Wait for an ActionInvoked or NotificationClosed signal for the given notification ID.
+/// Returns the action key if an action was invoked, or empty string on close/timeout.
+fn wait_for_action(notif_id: u32, timeout_secs: u32) -> String {
+    let mut monitor = match std::process::Command::new("timeout")
+        .args([
+            &(timeout_secs + 2).to_string(),
+            "gdbus", "monitor", "--session",
+            "--dest", "org.freedesktop.Notifications",
+            "--object-path", "/org/freedesktop/Notifications",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+
+    let id_str = notif_id.to_string();
+    let mut result = String::new();
+
+    if let Some(stdout) = monitor.stdout.take() {
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            // ActionInvoked (uint32 N, 'action_key')
+            if line.contains("ActionInvoked") && line.contains(&format!("uint32 {}", id_str)) {
+                // Extract action key from between single quotes after the ID
+                if let Some(start) = line.rfind('\'') {
+                    let before = &line[..start];
+                    if let Some(key_start) = before.rfind('\'') {
+                        result = line[key_start + 1..start].to_string();
+                    }
+                }
+                break;
+            }
+            // NotificationClosed (uint32 N, uint32 reason)
+            if line.contains("NotificationClosed") && line.contains(&format!("uint32 {}", id_str)) {
+                break;
+            }
+        }
+    }
+
+    let _ = monitor.kill();
+    let _ = monitor.wait();
+    result
+}
+
+/// Show a headset/headphones selection popup via D-Bus notification with action buttons.
+/// Runs in a background thread; blocks until user selects or notification times out.
+fn show_headset_popup(source_desc: String) {
+    if HEADSET_POPUP_ACTIVE.swap(true, Ordering::Relaxed) {
+        return; // popup already active
+    }
+    std::thread::spawn(move || {
+        let card_info = resolve_analog_card();
+
+        let notif_id = send_action_notification(
+            "Audio Jack Detected",
+            &format!("Select audio mode for:\n{}", source_desc),
+            "audio-headset",
+            15000,
+            &[("headset", "Headset (with mic)"), ("headphones", "Headphones only")],
+        );
+
+        if notif_id == 0 {
+            // Fallback: plain notification
+            notify_device_change("Audio Jack Detected", &source_desc);
+            HEADSET_POPUP_ACTIVE.store(false, Ordering::Relaxed);
+            return;
+        }
+
+        let action = wait_for_action(notif_id, 15);
+
+        if action == "headset" {
+            if let Some((card, profile)) = card_info {
+                let set_result = std::process::Command::new("pactl")
+                    .args(["set-card-profile", &card, &profile])
+                    .output();
+                match set_result {
+                    Ok(o) if o.status.success() => {
+                        notify_device_change(
+                            "Headset Mode Enabled",
+                            "Microphone input is now active",
+                        );
+                    }
+                    _ => {
+                        notify_device_change(
+                            "Headset Mode Failed",
+                            "Could not set card profile — try pavucontrol",
+                        );
+                    }
+                }
+            } else {
+                notify_device_change(
+                    "Headset Mode",
+                    "No analog card profile found — try pavucontrol",
+                );
+            }
+        }
+        // "headphones" or empty (timeout) → no action needed
+
+        HEADSET_POPUP_ACTIVE.store(false, Ordering::Relaxed);
+    });
+}
+
+/// Find a Bluetooth card matching a sink name and return (card_name, headset_profile).
+/// Prefers msbc (wideband) over cvsd, falls back to generic headset-head-unit.
+fn resolve_bluetooth_card(sink_name: &str) -> Option<(String, String)> {
+    let output = std::process::Command::new("pactl")
+        .args(["--format=json", "list", "cards"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let cards: Vec<serde_json::Value> = serde_json::from_str(&text).ok()?;
+
+    // Extract address from sink name, e.g. "50_C2_75_48_AA_AF" from
+    // "bluez_output.50_C2_75_48_AA_AF.1"
+    let addr = sink_name
+        .strip_prefix("bluez_output.")
+        .or_else(|| sink_name.strip_prefix("bluez_sink."))
+        .and_then(|rest| rest.rsplit_once('.').map(|(a, _)| a))
+        .unwrap_or("");
+
+    for card in &cards {
+        let card_name = card.get("name")?.as_str()?;
+        if !card_name.contains("bluez") || (!addr.is_empty() && !card_name.contains(addr)) {
+            continue;
+        }
+        if let Some(profiles) = card.get("profiles").and_then(|p| p.as_object()) {
+            let mut best: Option<String> = None;
+            for key in profiles.keys() {
+                let k = key.to_lowercase();
+                if k.contains("headset-head-unit-msbc") {
+                    return Some((card_name.to_string(), key.clone()));
+                } else if k.contains("headset-head-unit") && best.is_none() {
+                    best = Some(key.clone());
+                }
+            }
+            if let Some(profile) = best {
+                return Some((card_name.to_string(), profile));
+            }
+        }
+    }
+    None
+}
+
+/// Show a headset/headphones selection popup for a Bluetooth device.
+fn show_bluetooth_headset_popup(sink_name: String, sink_desc: String) {
+    if HEADSET_POPUP_ACTIVE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let card_info = resolve_bluetooth_card(&sink_name);
+
+        if card_info.is_none() {
+            notify_device_change("Bluetooth Audio Connected", &sink_desc);
+            HEADSET_POPUP_ACTIVE.store(false, Ordering::Relaxed);
+            return;
+        }
+
+        let notif_id = send_action_notification(
+            "Bluetooth Audio Connected",
+            &format!("Select audio mode for:\n{}", sink_desc),
+            "audio-headset",
+            15000,
+            &[("headset", "Headset (with mic)"), ("headphones", "Headphones only")],
+        );
+
+        if notif_id == 0 {
+            notify_device_change("Bluetooth Audio Connected", &sink_desc);
+            HEADSET_POPUP_ACTIVE.store(false, Ordering::Relaxed);
+            return;
+        }
+
+        let action = wait_for_action(notif_id, 15);
+
+        if action == "headset" {
+            if let Some((card, profile)) = card_info {
+                let set_result = std::process::Command::new("pactl")
+                    .args(["set-card-profile", &card, &profile])
+                    .output();
+                match set_result {
+                    Ok(o) if o.status.success() => {
+                        notify_device_change(
+                            "Headset Mode Enabled",
+                            "Microphone input is now active",
+                        );
+                    }
+                    _ => {
+                        notify_device_change(
+                            "Headset Mode Failed",
+                            "Could not set card profile — try pavucontrol",
+                        );
+                    }
+                }
+            }
+        }
+
+        HEADSET_POPUP_ACTIVE.store(false, Ordering::Relaxed);
+    });
+}
+
 fn process_device_changes(prev: &DeviceSnapshot, current: &DeviceSnapshot) {
     // Detect added sinks
     for (name, desc) in &current.sinks {
         if !prev.sinks.contains_key(name) {
-            notify_device_change("Audio Device Connected", desc);
+            if name.starts_with("bluez_") {
+                show_bluetooth_headset_popup(name.clone(), desc.clone());
+            } else {
+                notify_device_change("Audio Device Connected", desc);
+            }
         }
     }
     // Detect removed sinks
@@ -218,10 +519,11 @@ fn process_device_changes(prev: &DeviceSnapshot, current: &DeviceSnapshot) {
     // Detect added sources
     for (name, desc) in &current.sources {
         if !prev.sources.contains_key(name) {
-            notify_device_change("Audio Device Connected", desc);
-            // Headset mic detection
-            if desc.to_lowercase().contains("headset") {
-                notify_device_change("Headset Microphone Detected", desc);
+            if is_analog_source(name, desc) {
+                // Analog/headset source — show selection popup
+                show_headset_popup(desc.clone());
+            } else {
+                notify_device_change("Audio Device Connected", desc);
             }
         }
     }

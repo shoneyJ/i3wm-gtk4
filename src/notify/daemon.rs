@@ -151,22 +151,27 @@ impl NotificationDaemon {
 }
 
 /// Start the notification daemon on a background thread.
-/// Returns an action sender for emitting ActionInvoked D-Bus signals.
-pub fn start_notification_daemon(tx: mpsc::Sender<NotifyEvent>) -> mpsc::Sender<(u32, String)> {
+/// Returns an action sender for emitting ActionInvoked D-Bus signals
+/// and a close sender for emitting NotificationClosed D-Bus signals.
+pub fn start_notification_daemon(
+    tx: mpsc::Sender<NotifyEvent>,
+) -> (mpsc::Sender<(u32, String)>, mpsc::Sender<u32>) {
     let (action_tx, action_rx) = mpsc::channel::<(u32, String)>();
+    let (close_signal_tx, close_signal_rx) = mpsc::channel::<u32>();
     std::thread::spawn(move || {
         async_io::block_on(async {
-            if let Err(e) = run_daemon(tx, action_rx).await {
+            if let Err(e) = run_daemon(tx, action_rx, close_signal_rx).await {
                 log::error!("Notification daemon failed: {}", e);
             }
         });
     });
-    action_tx
+    (action_tx, close_signal_tx)
 }
 
 async fn run_daemon(
     tx: mpsc::Sender<NotifyEvent>,
     action_rx: mpsc::Receiver<(u32, String)>,
+    close_signal_rx: mpsc::Receiver<u32>,
 ) -> zbus::Result<()> {
     let daemon = NotificationDaemon {
         next_id: Arc::new(Mutex::new(1)),
@@ -199,6 +204,21 @@ async fn run_daemon(
             let emitter = iface_ref.signal_emitter();
             if let Err(e) = NotificationDaemon::action_invoked(&emitter, id, &action_key).await {
                 log::error!("Failed to emit ActionInvoked signal: {}", e);
+            }
+        }
+
+        // Emit NotificationClosed for dismissed popups (enables notify-send --wait)
+        while let Ok(id) = close_signal_rx.try_recv() {
+            log::info!("NotificationClosed #{}", id);
+            let iface_ref = conn
+                .object_server()
+                .interface::<_, NotificationDaemon>("/org/freedesktop/Notifications")
+                .await
+                .expect("interface not found");
+            let emitter = iface_ref.signal_emitter();
+            // reason 2 = dismissed by user, reason 1 = expired
+            if let Err(e) = NotificationDaemon::notification_closed(&emitter, id, 2).await {
+                log::error!("Failed to emit NotificationClosed signal: {}", e);
             }
         }
     }

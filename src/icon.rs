@@ -313,6 +313,47 @@ pub fn resolve_icon_in_theme(icon_name: &str) -> Option<PathBuf> {
         }
     }
 
+    // Fallback: /opt/ directories (deb-packaged apps like Vivaldi that skip XDG icon install)
+    if let Some(path) = resolve_icon_in_opt(icon_name) {
+        return Some(path);
+    }
+
+    None
+}
+
+/// Search /opt/ for icons from deb-packaged apps that don't install to standard theme dirs.
+/// Matches directories whose name starts with the icon name (e.g., "vivaldi" -> /opt/vivaldi/).
+fn resolve_icon_in_opt(icon_name: &str) -> Option<PathBuf> {
+    let opt = PathBuf::from("/opt");
+    let entries = fs::read_dir(&opt).ok()?;
+
+    for entry in entries.flatten() {
+        let dir_name = entry.file_name().to_string_lossy().to_lowercase();
+        if !dir_name.starts_with(icon_name) {
+            continue;
+        }
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+
+        // Prefer product_logo_48.png (common Chromium-based pattern), then other sizes
+        for size in ["48", "64", "128", "256", "32", "24", "16"] {
+            let path = dir.join(format!("product_logo_{}.png", size));
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        // Generic icon files in the app directory or resources/
+        for candidate in ["icon.png", "icon.svg", "resources/icon.png", "resources/icon.svg"] {
+            let path = dir.join(candidate);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
     None
 }
 

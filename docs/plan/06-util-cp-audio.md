@@ -352,6 +352,7 @@ i3 has no equivalent service.
 5. **Test audio switching** — 9 unit tests pass (glob matching, sink filtering, volume_icon). Integration testing requires PulseAudio.
 
 **Key implementation decisions:**
+
 - `AudioConfig` only has `preferred_sinks` and `excluded_sinks` (not sources) — YAGNI until Phase 5 adds source dropdowns
 - `move_sink_inputs` is best-effort per stream — a single failing stream shouldn't block the switch
 - `get_sink_description` uses `serde_json::Value` (not a typed struct) since we only need the `description` field from the large JSON response
@@ -372,12 +373,12 @@ i3 has no equivalent service.
    - Press `$mod+p` — audio device switches
 4. **Performance verification** ✅
 
-   | Command | i3more-audio (Rust) | Bash script | Speedup |
-   |---------|-------------------|-------------|---------|
-   | volume-up | 10-20ms (avg ~12ms) | 30-40ms (avg ~32ms) | ~2.7x |
-   | volume-down | 10ms | 30ms | ~3x |
-   | volume-mute | 10ms | 30ms | ~3x |
-   | audio-switch | 10-20ms (avg ~14ms) | 60-80ms (avg ~64ms) | ~4.6x |
+   | Command      | i3more-audio (Rust) | Bash script         | Speedup |
+   | ------------ | ------------------- | ------------------- | ------- |
+   | volume-up    | 10-20ms (avg ~12ms) | 30-40ms (avg ~32ms) | ~2.7x   |
+   | volume-down  | 10ms                | 30ms                | ~3x     |
+   | volume-mute  | 10ms                | 30ms                | ~3x     |
+   | audio-switch | 10-20ms (avg ~14ms) | 60-80ms (avg ~64ms) | ~4.6x   |
 
    All subcommands well under the 30ms target. Audio-switch sees the largest improvement (4.6x) since the bash script spawned the most subprocesses (pactl list + grep + awk + pactl set + pactl move per stream + notify-send).
 
@@ -416,6 +417,7 @@ i3 has no equivalent service.
    - `pactl --format=json list sinks` confirmed working on PipeWire, returns human-readable descriptions
 
 **Key findings:**
+
 - `pactl subscribe` output on PipeWire includes `client` events for every pactl invocation — the event filter correctly ignores these and only acts on sink/source/server events
 - PipeWire sink names use `HiFi__hw_sofhdadsp{_N}__sink` format (not `analog-stereo` like PulseAudio), so config glob patterns needed adjustment from the original plan
 - `DropDown::from_strings` creates the expression internally; `set_model` with new `StringList` preserves the expression for correct rendering
@@ -531,12 +533,12 @@ The current volume widget (`src/notify/widgets/volume.rs:101-124`) polls `pactl`
 
 The EWW scripts (`~/dotfiles/eww/.config/eww/scripts/`) reveal the problem. Multiple scripts ran tight polling loops simultaneously:
 
-| EWW Script | Method | Interval | CPU Impact |
-|------------|--------|----------|------------|
-| `get_volume_listen.sh` | `while true; wpctl get-volume; sleep 0.5` | 0.5s | High — 2 process spawns/sec |
-| `get_mic_volume_listen.sh` | `while true; wpctl get-volume; sleep 0.5` | 0.5s | High — 2 process spawns/sec |
-| `get_audio_devices.py` | `pactl subscribe` + refresh on events | Event-driven | **Zero CPU when idle** |
-| `sys_info.sh` | One-shot (called on interval by EWW) | EWW poll | Medium |
+| EWW Script                 | Method                                    | Interval     | CPU Impact                  |
+| -------------------------- | ----------------------------------------- | ------------ | --------------------------- |
+| `get_volume_listen.sh`     | `while true; wpctl get-volume; sleep 0.5` | 0.5s         | High — 2 process spawns/sec |
+| `get_mic_volume_listen.sh` | `while true; wpctl get-volume; sleep 0.5` | 0.5s         | High — 2 process spawns/sec |
+| `get_audio_devices.py`     | `pactl subscribe` + refresh on events     | Event-driven | **Zero CPU when idle**      |
+| `sys_info.sh`              | One-shot (called on interval by EWW)      | EWW poll     | Medium                      |
 
 The EWW CPU drain came from the `sleep 0.5` polling loops — each spawning `wpctl` + `awk` twice per second. With volume + mic + other scripts, that's 8+ process spawns per second continuously, even when nothing changes.
 
@@ -560,11 +562,13 @@ Event 'change' on server
 ```
 
 When a `change` event on `sink` or `server` arrives, read the new volume/mute state. This gives:
+
 - **Zero CPU when idle** (no polling, blocked on pipe read)
 - **Instant updates** (<50ms latency vs 2000ms polling)
 - **Single long-lived process** vs spawning 2 processes every 2 seconds
 
 Implementation in `volume.rs`:
+
 ```rust
 // Spawn pactl subscribe as background process
 let child = Command::new("pactl").arg("subscribe")
@@ -580,13 +584,208 @@ The same `pactl subscribe` stream also emits `new`/`remove` events for sinks and
 
 ### Impact summary
 
-| Component | Current | Proposed | Saving |
-|-----------|---------|----------|--------|
-| Volume widget poll | 2 process spawns / 2s | `pactl subscribe` (1 persistent process) | ~1 spawn/sec eliminated |
-| Device list | None (rebuild on panel open) | Same `pactl subscribe` stream | Event-driven device list |
-| Headset detection | Not implemented | Same `pactl subscribe` stream | Already event-driven |
+| Component          | Current                      | Proposed                                 | Saving                   |
+| ------------------ | ---------------------------- | ---------------------------------------- | ------------------------ |
+| Volume widget poll | 2 process spawns / 2s        | `pactl subscribe` (1 persistent process) | ~1 spawn/sec eliminated  |
+| Device list        | None (rebuild on panel open) | Same `pactl subscribe` stream            | Event-driven device list |
+| Headset detection  | Not implemented              | Same `pactl subscribe` stream            | Already event-driven     |
 
 ### Integration with phased implementation
 
 - **Phase 5 (Control Panel Widget)**: Replace the 2-second `glib::timeout_add_local` poll in `volume.rs` with `pactl subscribe` listener. This is the right time since we're already modifying the widget to add device dropdowns.
 - **Phase 6 (Headset Detection)**: Reuses the same `pactl subscribe` stream — no additional process needed.
+
+### plugin-headset
+
+- During the initial login with The GNOME Display Manager (GDM), when an audio jack is plugged in, the "Select Audio Device" popup in GNOME Shell appears to distinguish between a Headset (headphones + microphone) and Headphones (audio output only). This allows GNOME to correctly use the microphone embedded in your headset.
+
+In the current audio setup, this is missing.
+
+- The mic on system tray should show with clickable mute and unmute buttons.
+- Bluetooth headset (Jabra Evolve 85) needs both audio output AND microphone input.
+
+#### Mic Indicator on Bar ✅ Implemented (2026-04-06)
+
+A microphone mute/unmute indicator in the navigator bar (`src/mic_indicator.rs`):
+
+- **Position**: Between system tray icons and control panel icon in `right_box`
+- **Visibility**: Only shown when a real (non-monitor) audio source exists. Auto-hides when no mic detected.
+- **Icons**: Font Awesome `MICROPHONE` (green `#b8bb26`) when active, `MICROPHONE_SLASH` (red `#fb4934`) when muted
+- **Click**: Toggles `pactl set-source-mute @DEFAULT_SOURCE@ toggle`
+- **Monitoring**: Own `pactl subscribe` thread for real-time updates on source changes, mute state, default source changes
+- **Tooltip**: Shows "Microphone: Active" or "Microphone: Muted"
+- **Jabra Evolve 85 via audio jack**: When user selects "Headset (with mic)" in the headset popup, the mic source appears and the indicator becomes visible automatically
+
+#### jLink Reference Submodule
+
+Added `reference/jLink` → https://github.com/Watchdog0x/jLink.git — a Go CLI tool for managing Jabra headsets on Linux (battery status, Bluetooth pairing, firmware updates). Uses the proprietary Jabra SDK (`libjabra.so`). Potential future integration: battery indicator in bar, pairing management from control panel.
+
+---
+
+#### Bluetooth Headset Architecture — A2DP vs HSP/HFP (2026-04-07)
+
+##### The Problem
+
+Bluetooth audio on Linux has two mutually exclusive profile families:
+
+| Profile                           | Audio Quality            | Microphone | Use Case              |
+| --------------------------------- | ------------------------ | ---------- | --------------------- |
+| **A2DP** (SBC, SBC-XQ, AAC, LDAC) | High — stereo 44.1/48kHz | None       | Music, media playback |
+| **HSP/HFP** (CVSD, mSBC)          | Low — mono 8-16kHz       | Yes        | Voice calls           |
+
+The Jabra Evolve2 85 (`bluez_card.50_C2_75_48_AA_AF`) supports:
+
+- `a2dp-sink` — High Fidelity Playback (SBC)
+- `a2dp-sink-sbc_xq` — High Fidelity Playback (SBC-XQ)
+- `headset-head-unit` — HSP/HFP (generic)
+- `headset-head-unit-cvsd` — HSP/HFP (CVSD codec, 8kHz mono)
+- `headset-head-unit-msbc` — HSP/HFP (mSBC codec, 16kHz mono, best HFP quality)
+
+When on A2DP, only a `.monitor` source exists — no real microphone. Switching to HSP/HFP enables the mic but drops audio to mono 16kHz (mSBC) or 8kHz (CVSD).
+
+##### What Already Works — WirePlumber Auto-Switching
+
+WirePlumber 0.4.17 (installed) has **automatic profile switching** enabled by default:
+
+- Config: `/usr/share/wireplumber/policy.lua.d/10-default-policy.lua`
+- Setting: `bluetooth_policy.policy["media-role.use-headset-profile"] = true`
+- Script: `/usr/share/wireplumber/scripts/policy-bluetooth.lua`
+
+**How it works**: When an app with `media.role = Communication` (or one listed in `media-role.applications`) opens an audio input stream while a Bluetooth device is the default sink:
+
+1. WirePlumber detects the stream and checks if the current Bluetooth profile has an input route
+2. If not (A2DP), it auto-switches to the highest-priority profile with input (HSP/HFP mSBC)
+3. When the stream closes, it waits 2 seconds then restores the previous A2DP profile
+
+**Pre-configured apps** (already in WirePlumber config):
+Firefox, Chromium input, Google Chrome input, Brave input, Microsoft Edge input, Vivaldi input, ZOOM VoiceEngine, Telegram Desktop, linphone, Mumble, WEBRTC VoiceEngine, Skype
+
+**Custom additions** (user override at `~/.config/wireplumber/policy.lua.d/10-default-policy.lua`):
+Slack, slack, Microsoft Teams, teams-for-linux
+
+The user file shadows the system file (same filename = higher priority in WirePlumber 0.4.x). After system WirePlumber package updates, diff to check for upstream changes:
+
+```bash
+diff ~/.config/wireplumber/policy.lua.d/10-default-policy.lua \
+     /usr/share/wireplumber/policy.lua.d/10-default-policy.lua
+```
+
+**This means**: Zoom/Teams/Slack/browser calls should auto-switch the Jabra to HSP/HFP when mic is needed, and back to A2DP when the call ends. No i3more code needed for this flow.
+
+##### What's Missing — i3more Enhancements
+
+**Problem 1: No default sink auto-switch on Bluetooth connect**
+
+When the Jabra connects via Bluetooth, the default sink stays on the built-in speakers. The user must manually switch. GNOME auto-switches to newly connected Bluetooth devices.
+
+**Solution**: Extend `process_device_changes()` in `volume.rs` to auto-set default sink when a Bluetooth sink appears. Or add a popup: "Jabra Evolve2 85 connected. Switch audio?" with action buttons.
+
+**Problem 2: Manual profile toggle needed for non-Communication apps**
+
+Some apps don't set `media.role = Communication` and aren't in WirePlumber's app list. The user needs a way to manually switch the Bluetooth profile.
+
+**Solution**: Add a Bluetooth profile toggle to the control panel audio widget. When the current output is a Bluetooth device:
+
+- Show current profile (A2DP / HSP/HFP) next to the output dropdown
+- Provide a toggle button or dropdown to switch profiles
+- Use `pactl set-card-profile {bluez_card} {profile_name}`
+
+**Problem 3: Mic indicator doesn't reflect Bluetooth state**
+
+When on A2DP, the mic indicator is hidden (no real source). The user has no visual cue that their headset mic is unavailable.
+
+**Solution**: Enhance `mic_indicator.rs` to detect when the default sink is Bluetooth + A2DP and show a distinct state:
+
+- Bluetooth + A2DP (no mic): Show `MICROPHONE_SLASH` in amber/yellow — "Mic unavailable (A2DP mode)"
+- Bluetooth + HSP/HFP (mic active): Show `MICROPHONE` in green — normal active state
+- Click when in A2DP: Offer to switch to HSP/HFP (profile toggle)
+
+**Problem 4: No notification when profile auto-switches**
+
+When WirePlumber auto-switches A2DP ↔ HSP/HFP for a call, the user gets no feedback. Audio quality changes abruptly.
+
+**Solution**: Monitor card profile changes via `pactl subscribe` (`'change' on card` events). When a Bluetooth card's profile changes, show a notification:
+
+- "Jabra Evolve2 85: Switched to Headset mode (mic enabled)"
+- "Jabra Evolve2 85: Switched to High Fidelity mode"
+
+##### Phased Implementation
+
+**Phase A: Bluetooth auto-connect (immediate value)**
+
+1. Detect new Bluetooth sink in `process_device_changes()`
+2. Show popup: "Switch audio to {device}?" with action buttons
+3. On accept: `pactl set-default-sink` + migrate streams
+
+**Phase B: Profile toggle in control panel**
+
+1. Detect if current output sink is Bluetooth (name starts with `bluez_output.`)
+2. Query card profiles via `pactl --format=json list cards`
+3. Show profile indicator/toggle next to output dropdown
+4. On toggle: `pactl set-card-profile {card} {profile}`
+
+**Phase C: Enhanced mic indicator for Bluetooth**
+
+1. Detect default sink is Bluetooth + check card profile (A2DP vs HSP/HFP)
+2. Show amber mic icon when Bluetooth is on A2DP (mic unavailable)
+3. Click offers profile switch
+4. Show green mic icon when HSP/HFP active
+
+**Phase D: Profile change notifications**
+
+1. Add `'change' on card` to `pactl subscribe` event parsing
+2. Diff card active profiles on change events
+3. Show notification on Bluetooth profile transitions
+
+##### Hybrid Mic Approach — Built-in Mic + Bluetooth A2DP
+
+An alternative to HSP/HFP: use the built-in laptop microphone for input while keeping the Jabra on A2DP for high-quality audio output. This avoids the quality degradation of HSP/HFP entirely.
+
+**Implementation**: When user clicks mic indicator while on Bluetooth A2DP, offer three choices:
+
+1. "Switch to Headset mode" — HSP/HFP (mono 16kHz, Jabra mic)
+2. "Use built-in mic" — keep A2DP, set default source to built-in analog input
+3. "Cancel" — no change
+
+This requires `pactl set-default-source {built-in-source}` without changing the sink profile.
+
+---
+
+#### Analysis — Existing Infrastructure (2026-04-06)
+
+The i3more codebase already has all the building blocks for this feature:
+
+| Component                     | Location                                  | What it provides                                                                     |
+| ----------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ |
+| `pactl subscribe` listener    | `control_panel/widgets/volume.rs:301-336` | Real-time device add/remove events, auto-restart on failure                          |
+| Device change detection       | `control_panel/widgets/volume.rs:205-234` | Diff-based detection via `DeviceSnapshot`, basic headset pattern match at line 223   |
+| Popup with action buttons     | `notify/render.rs:262-289`                | Button creation, click handlers, `(id, action_key)` via D-Bus `ActionInvoked` signal |
+| `NotificationClosed` signal   | `notify/daemon.rs:137-142`                | Signal defined but not emitted on popup dismiss — **fixed as part of this phase**    |
+| Config-based device filtering | `control_panel/widgets/volume.rs:58-64`   | JSON glob patterns for preferred/excluded devices                                    |
+| Device info resolution        | `control_panel/widgets/volume.rs:109-132` | `pactl --format=json` parsing for human-readable descriptions                        |
+
+#### Implementation Approach
+
+**Trigger**: When `pactl subscribe` reports a new source matching `*analog*` or `*headset*` patterns (and it wasn't present at startup — the `DeviceSnapshot` diff handles this).
+
+**Popup**: Uses `notify-send --action` (libnotify 0.8+) which sends a D-Bus notification with action buttons through our notification daemon. The `notify-send` process blocks waiting for `ActionInvoked` or `NotificationClosed` D-Bus signal, then prints the selected action key to stdout.
+
+**Profile switch**: On "Headset" action, runs `pactl set-card-profile {card} {profile}` where the card and profile are resolved dynamically from `pactl --format=json list cards` (looking for profiles with both analog output and input).
+
+**Daemon fix required**: `notify-send --action` (implies `--wait`) needs `NotificationClosed` signal on popup timeout/dismiss. Previously the daemon defined the signal but never emitted it. Fixed by:
+
+1. Adding `close_signal_tx` channel from main loop → daemon thread
+2. Popup timeout handlers now send `NotifyEvent::Close(id)` back to main loop
+3. Main loop forwards close events to daemon via `close_signal_tx`
+4. Daemon emits `NotificationClosed(id, reason)` D-Bus signal
+
+**Concurrency guard**: `AtomicBool` prevents multiple headset popups from overlapping during rapid device change events.
+
+#### Known Limitations
+
+- **sof-hda-dsp combo jack**: On PipeWire with UCM (Use Case Manager), plugging in a 3.5mm headset may NOT create new source/sink nodes — the nodes may exist at all times with the jack detection handled at the WirePlumber level. In this case, `pactl subscribe` won't see `'new' on source` events. The detection still works for USB headsets and systems where the driver creates nodes dynamically.
+- **Card profile names**: Profile names vary across PulseAudio (`output:analog-stereo+input:analog-stereo`) and PipeWire/UCM (`HiFi`). The implementation searches for profiles containing both "output"/"input"/"analog" or "headset" keywords. May need adjustment per hardware.
+- **Fallback**: If `notify-send --action` is unavailable (libnotify < 0.8), falls back to a plain notification without buttons. If no matching card profile is found, shows an informational notification suggesting pavucontrol.
+
+- bluthooth headset connected. but not visible in the control menu.
+- bluetooth detected jabra Evolve2 85

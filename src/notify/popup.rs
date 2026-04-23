@@ -111,10 +111,12 @@ impl PopupManager {
         };
 
         let popups_ref = self.popups.clone();
+        let close_tx = self.close_tx.clone();
         let id = notif.id;
         entry.timeout_source = Some(glib::timeout_add_local_once(
             std::time::Duration::from_millis(timeout_ms as u64),
             move || {
+                let _ = close_tx.send(NotifyEvent::Close(id));
                 dismiss_popup(&popups_ref, id);
             },
         ));
@@ -203,7 +205,7 @@ impl PopupManager {
             glib::timeout_add_local_once(std::time::Duration::from_millis(50), move || {
                 let criteria = format!("[title=\"{}\"]", title);
                 let cmd = format!(
-                    "{criteria} resize set {POPUP_WIDTH} px {POPUP_HEIGHT_ESTIMATE} px, {criteria} move position {x} px {y} px"
+                    "{criteria} resize set {POPUP_WIDTH} px 0 px, {criteria} move position {x} px {y} px"
                 );
                 let _ = std::process::Command::new("i3-msg")
                     .args([&cmd])
@@ -228,10 +230,12 @@ impl PopupManager {
         };
 
         let popups_ref = self.popups.clone();
+        let close_tx_timeout = self.close_tx.clone();
         let id = notif.id;
         let timeout_source = Some(glib::timeout_add_local_once(
             std::time::Duration::from_millis(timeout_ms as u64),
             move || {
+                let _ = close_tx_timeout.send(NotifyEvent::Close(id));
                 dismiss_popup(&popups_ref, id);
             },
         ));

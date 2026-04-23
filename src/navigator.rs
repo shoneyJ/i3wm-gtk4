@@ -140,11 +140,15 @@ pub fn build_navigator(
     cp_overlay.set_child(Some(&cp_label));
     cp_overlay.add_css_class("control-panel-icon");
 
-    // Right side: tray icons + sliders icon + bell
+    // Mic mute indicator (only visible when a mic source exists)
+    let mic_handles = crate::mic_indicator::build_mic_indicator();
+
+    // Right side: tray icons + mic indicator + sliders icon + bell
     let right_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     right_box.set_halign(gtk4::Align::End);
     right_box.set_valign(gtk4::Align::Center);
     right_box.append(&tray_box);
+    right_box.append(&mic_handles.container);
     right_box.append(&cp_overlay);
     right_box.append(&bell_overlay);
 
