@@ -1,0 +1,255 @@
+# speech-to-text — data streaming architecture
+
+Companion to `docs/plan/speech-text.md` §"Streaming architecture (v2)" (Phases S1–S7) plus the **Phase 7-prime** refinement (multi-backend capture + automatic default-sink switching) added after the S1 HSP/HFP findings of 2026-04-25.
+
+This doc is purely about **where the bytes flow and which Linux primitive carries them**. Rationale and exit criteria live in the parent plan.
+
+## 1. Process / thread topology
+
+```mermaid
+flowchart LR
+  classDef rt    fill:#fde,stroke:#a44,stroke-width:1px
+  classDef cap   fill:#ddf,stroke:#449,stroke-width:1px
+  classDef inf   fill:#fed,stroke:#a64,stroke-width:1px
+  classDef io    fill:#dfd,stroke:#494,stroke-width:1px
+  classDef sub   fill:#eee,stroke:#666,stroke-width:1px
+
+  subgraph "i3more-speech-text process"
+    direction LR
+
+    PWrt["PipeWire RT thread<br/>(libpipewire owned)"]:::rt
+    Cap["Capture worker thread"]:::cap
+    Sub["pactl-subscribe watcher thread"]:::sub
+    Inf["Inference worker thread"]:::inf
+    Main["epoll main loop (Phase S6)"]:::io
+    BC["Broadcast accept thread (Phase S5)"]:::io
+
+    PWrt -- "RT process callback<br/>S16_LE samples" --> Cap
+    Cap  -- "ring buffer write<br/>(memfd or Vec)" --> Inf
+    Cap  -- "eventfd::signal()<br/>(Phase S4)" --> Inf
+    Sub  -- "default-sink-change<br/>command channel" --> Cap
+    Inf  -- "Segment{kind, text, at}<br/>mpsc" --> Main
+    Main -- "append + fsync" --> File[("transcript<br/>YYYY-MM-DD/<session>.md")]:::io
+    Main -- "send(SEQPACKET)" --> BC
+    BC   -- "1 packet per segment" --> Subscribers[(subscribers:<br/>tail TUI / control-panel widget)]:::io
+  end
+
+  subgraph "External processes"
+    Jabra[(PipeWire daemon /<br/>Bluetooth stack)]
+    PactlSub[/"pactl subscribe<br/>(child process)"/]
+  end
+
+  Jabra --> PWrt
+  PactlSub --> Sub
+```
+
+### Thread ownership rules
+
+| Thread                  | Owns                                                  | Touches kernel via                                     | Notes                                                                                              |
+| ----------------------- | ----------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| PipeWire RT             | nothing of ours; just a closure pointer               | shared mmap, atomic counters in libpipewire            | No allocations, no syscalls, no logs. Pushes samples to the capture-thread ring buffer + signals an `eventfd`. |
+| Capture worker          | the ring buffer, the active backend, the sink-change command channel | `eventfd_write`, ring-buffer atomic indices            | Owned by the chosen backend (`parec` *xor* `pipewire`). Re-resolves and respawns on default-sink change. |
+| `pactl subscribe` watcher | one `Child` (the `pactl subscribe` subprocess), one `mpsc::Sender` | `read(stdout_fd)`                                       | Parses `Event 'change' on server` lines; sends a re-resolve command to the capture worker.        |
+| Inference worker        | `WhisperContext`, `WhisperState`, the transcript file | `read(eventfd)`, `write(file_fd)`, `fsync`             | Heavy compute; one thread is enough — whisper is single-threaded above the GPU.                   |
+| Broadcast accept        | the listening `SOCK_SEQPACKET` socket, subscriber list | `accept`, `send`                                       | Tiny; kept separate so `accept` can block.                                                         |
+| `epoll` main (S6)       | the epoll set + `signalfd`                            | `epoll_wait`, `read(signalfd)`                         | Receives `Segment`s from inference, writes them to the file and the broadcast socket.            |
+
+## 2. Data path
+
+### 2.1 Audio capture path (S1 + Phase-7-prime)
+
+```text
+                   ┌────────────── BACKEND ──────────────┐
+                   │                                     │
+                   │   parec backend (default)           │
+                   │   ──────────────────────────────    │
+        Jabra ─────►   parec --device <sink>.monitor     │   16-bit mono 16 kHz PCM
+        sink     │   --raw → stdout pipe (fd)            │   bytes → Vec<i16>
+                   │                                     │
+                   │   pipewire backend (opt-in)         │
+                   │   ──────────────────────────────    │
+                   │   PipeWire MainLoop on RT thread    │
+                   │   process_cb(buf) → Vec<i16>        │
+                   │                                     │
+                   └──────────────┬──────────────────────┘
+                                  │ (push)
+                                  ▼
+        ┌─────────────────────────────────────────────────┐
+        │  Audio ring buffer  ─  capacity: length_ms      │
+        │  (lock-free SPSC; reader = inference thread)    │
+        │  Backed by either: heap Vec<i16>                │
+        │             *or*: memfd_create + mmap (S4 opt.) │
+        └─────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                              eventfd
+                                  │
+                                  ▼  (read → step tick)
+        ┌─────────────────────────────────────────────────┐
+        │  Inference loop (S2/S3)                         │
+        │    every step_ms (≈1 s):                        │
+        │      snap = ring.last(length_ms)                │
+        │      if vad.is_silent_for(commit_ms):           │
+        │          emit Segment::Final + clear prompt     │
+        │      else:                                       │
+        │          state.full(snap, prompt_tokens)        │
+        │          new_text = current transcript          │
+        │          suffix = strip_common_prefix(new, prev)│
+        │          if !suffix.is_empty():                  │
+        │              emit Segment::Provisional(suffix)  │
+        │          prev = new_text                         │
+        └─────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                            mpsc::Sender<Segment>
+                                  │
+                                  ▼
+                          ┌──────────────┐
+                          │ epoll main   │  → write(transcript_fd)  → fsync
+                          │ (S6)         │  → send(SOCK_SEQPACKET, JSON)
+                          └──────────────┘
+```
+
+### 2.2 Output path
+
+```text
+                                              segment received on mpsc
+                                                       │
+                                ┌──────────────────────┴──────────────────────┐
+                                │                                             │
+                                ▼                                             ▼
+              ┌──────────────────────────────┐         ┌──────────────────────────────┐
+              │  Persistence (S7 / 6.5)       │         │  Live broadcast (S5)         │
+              │  ─────────────────────────    │         │  ─────────────────────────   │
+              │  open(transcript_path,        │         │  for sub in subscribers:     │
+              │       O_APPEND|O_CREAT)       │         │      send(sub.fd,            │
+              │  write("- **HH:MM:SS** —      │         │           json_bytes,        │
+              │         <text>\n")            │         │           MSG_DONTWAIT)      │
+              │  fdatasync(fd)                │         │  prune subs that closed      │
+              └──────────────────────────────┘         └──────────────────────────────┘
+                                                                       │
+                                                                       ▼
+                                                        ┌──────────────────────────┐
+                                                        │  Subscribers              │
+                                                        │  ─ i3more-speech-text-tail│
+                                                        │  ─ control-panel widget   │
+                                                        │  ─ ad-hoc viewer / debug  │
+                                                        └──────────────────────────┘
+```
+
+## 3. Kernel IPC primitives — what each does and where it sits
+
+| Primitive               | Used by phase | What carries through it                                                                  | Why this primitive                                                                                  |
+| ----------------------- | ------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `eventfd`               | S4            | "≥ step_ms of fresh audio is in the ring buffer, wake up"                                 | 8-byte counter wakeup; safe in libpipewire's RT closure (no alloc, no blocking syscall).           |
+| `memfd_create` + `mmap` | S4 (optional) | The audio ring buffer itself                                                              | Anonymous tmpfs page; clean lifecycle vs heap; can later be sealed and shared with a future GUI process. |
+| `pipe` (anonymous)      | parec backend | S16_LE PCM bytes from `parec --raw` stdout                                                | Already what `Stdio::piped()` gives us; cheap; survives across short Bluetooth blips.              |
+| Unix-domain `SOCK_SEQPACKET` | S5      | One JSON-encoded `Segment` per packet, broadcast to live subscribers                      | Preserves message boundaries (no JSON-line framing in the consumer), supports multiple subscribers via accept loop. |
+| `signalfd`              | S6            | SIGINT / SIGTERM / SIGHUP                                                                 | Lets `epoll` see signals as fds; replaces a `libc::signal` handler that can only flip a flag.     |
+| `timerfd`               | S6 (optional) | The 1 s "step tick" that drives sliding-window inference                                  | Steady periodic wake under epoll. Alternative: just use the eventfd from the capture side.        |
+| `epoll`                 | S6            | All of the above multiplexed                                                              | Single thread, one syscall to wait on N fds. Replaces the ad-hoc thread-per-source layout.        |
+| **D-Bus over UDS**      | (control-panel) | "start session named X" / "stop" / "current status"                                     | When the GTK control-panel widget arrives, it controls the speech-text process via these messages. |
+
+Out of scope: POSIX `shm_open`, `io_uring`, `inotify`. They're useful elsewhere; this pipeline doesn't need them.
+
+## 4. Lifecycle sequences
+
+### 4.1 Startup (cold path)
+
+```mermaid
+sequenceDiagram
+  participant U  as User (i3 keybind)
+  participant M  as i3more-speech-text main
+  participant CW as Capture worker
+  participant SW as pactl-subscribe watcher
+  participant IW as Inference worker
+  participant BC as Broadcast acceptor
+
+  U  ->>+ M:  exec
+  M  ->>  M:  init_logging("speech-text")
+  M  ->>  M:  install signalfd / sigprocmask
+  M  ->>  M:  load_config()
+  M  ->>  M:  resolve session name (env / arg / default)
+  M  ->>+ CW: start(default_sink, command_rx)
+  M  ->>+ SW: start(command_tx)
+  M  ->>+ IW: start(audio_ring, segments_tx)
+  M  ->>+ BC: bind $XDG_RUNTIME_DIR/i3more/speech-text.sock
+  M  ->>  M:  open transcript file, write front-matter
+  M  ->>  M:  enter epoll loop
+```
+
+### 4.2 Default-sink change mid-session (Phase-7-prime)
+
+```mermaid
+sequenceDiagram
+  participant SW as pactl-subscribe watcher
+  participant CW as Capture worker
+  participant Bk as Backend (parec or pipewire)
+  participant IW as Inference worker
+
+  SW  ->>  CW: command: SinkChanged(new_sink)
+  CW  ->>  Bk: shutdown()  (kill parec / disconnect Stream)
+  CW  ->>  CW: re-resolve target via pactl/registry
+  CW  ->>  Bk: spawn(new_sink)
+  Note right of IW: ring keeps draining;<br/>brief gap (~1 s) shows up<br/>as a single missed step.
+  Bk  ->>  CW: first PCM frame
+  CW  ->>  IW: eventfd::signal()
+```
+
+### 4.3 Shutdown (SIGTERM)
+
+```mermaid
+sequenceDiagram
+  participant K  as Kernel
+  participant M  as epoll main
+  participant Bk as Backend
+  participant IW as Inference worker
+  participant BC as Broadcast acceptor
+
+  K  ->>  M: SIGTERM → signalfd readable
+  M  ->>  Bk: stop()
+  M  ->>  IW: drop sender (segments channel)
+  IW ->>  IW: drain pending; flush transcript fd
+  IW -->> M: thread joins
+  M  ->>  BC: close listen socket; close subscribers
+  M  ->>  K: exit
+```
+
+## 5. Phase mapping
+
+| Block in §1 / §2                 | Phase  | Status (2026-04-25)                                            |
+| -------------------------------- | ------ | -------------------------------------------------------------- |
+| `parec` backend                  | 2 / 7-prime | done in Phase 2, removed during S1.d, **scheduled to return** as default backend |
+| `pipewire` backend               | S1     | done; **demoted to opt-in** because of the HSP/HFP regression |
+| Capture worker                   | 2 / S1 | done                                                           |
+| `pactl subscribe` watcher        | 7-prime | scheduled                                                     |
+| Audio ring buffer                | S2     | scheduled (currently a `Vec<i16>` accumulator inside the worker) |
+| Sliding-window inference         | S2     | scheduled                                                     |
+| VAD + Final/Provisional          | S3     | scheduled                                                     |
+| `eventfd` capture → inference    | S4     | scheduled (currently `mpsc + recv_timeout(200ms)`)            |
+| `SOCK_SEQPACKET` broadcast       | S5     | scheduled                                                     |
+| `epoll` + `signalfd` main        | S6     | scheduled (currently `libc::signal` + a thread per source)   |
+| TUI follower                     | S7     | scheduled                                                     |
+| Transcript file persistence      | 6.5    | done                                                           |
+| Session naming (env / arg)       | 6.5    | done                                                           |
+
+## 6. Failure modes and what catches them
+
+| Failure                                              | Where it lands                                | What recovers it                                                                                                |
+| ---------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `parec` exits (sink removed, broken pipe)            | Capture worker `read` returns 0 / Err          | Worker logs, sets `is_active=false`; pactl-subscribe watcher posts a SinkChanged event when a new sink appears. |
+| PipeWire stream goes `Error` on Bluetooth disconnect | `state_changed(_, _, _, Error)` listener       | Capture worker tears down the Stream and triggers re-resolve via the same command channel as a sink change.    |
+| HSP/HFP profile silence (PipeWire bug)               | Diag log shows `peak |s| = 0` for ≥ N seconds  | Phase-7-prime: backend dispatcher *demotes* PipeWire and falls back to `parec` for this session.                |
+| Backpressure on audio ring buffer                    | `try_send` returns `Full` in the RT callback   | Drop the chunk silently. The worker is behind; transcript is going to skip a beat anyway.                      |
+| Backpressure on broadcast socket                     | `send(MSG_DONTWAIT)` returns `EAGAIN`          | Drop the segment for that subscriber. Next segment may go through. Subscribers that close are pruned.          |
+| Inference exception (whisper-rs error)               | `state.full(...)` returns `Err`                | Log, skip this chunk, continue. Whisper context is reusable.                                                   |
+| Transcript file `write` fails (disk full, etc.)      | `write` returns `Err` in the inference worker  | Log; keep streaming to broadcast subscribers. Disk persistence is best-effort; the live feed is the source of truth. |
+
+## 7. Glossary (one-liners)
+
+- **A2DP** — Bluetooth high-quality stereo profile. No mic. Works for native PipeWire monitoring.
+- **HSP/HFP** — Bluetooth headset profile. Mic active. *Currently broken for native PipeWire monitor capture in PipeWire 1.0.5; works fine via `parec`.*
+- **Provisional segment** — text from the in-flight inference window; may change on the next step.
+- **Final segment** — text committed at a silence boundary (VAD); will not be revised.
+- **`target.object`** — PipeWire stream property pinning the stream to a specific node by name. Auto-reconnects when the node is replaced.
+- **`stream.capture.sink`** — sibling property used by pw-cat-style code to consume a sink's monitor signal.

@@ -28,6 +28,24 @@ services:
     command: bash /app/tests/docker-lock-test.sh
     working_dir: /app
 
+  whisper-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper-cuda
+    volumes:
+      - .:/src
+      - cargo-registry:/root/.cargo/registry
+      - whisper-target:/src/target
+    working_dir: /src
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [compute, utility]
+
 volumes:
   cargo-registry:
   cargo-target:
+  whisper-target:

@@ -18,20 +18,47 @@ installs i3, then installs i3More as a single package/binary.
 
 ## Quick Start
 
+Builds are split across two containers because the `i3more-speech-text`
+binary needs CUDA + whisper.cpp + clang and we don't want that in the
+default dev image.
+
 ```bash
-killall i3more 2>/dev/null; docker compose run --rm dev bash -c "cargo build --release && cp target/release/i3more target/release/i3more-translate dist/"
+# Everything except speech-text — builds quickly, no CUDA / cmake / clang.
+killall i3more 2>/dev/null; docker compose run --rm dev bash -c \
+  "cargo build --release --bin i3more --bin i3more-translate \
+                            --bin i3more-audio --bin i3more-launcher && \
+   cp target/release/i3more target/release/i3more-translate \
+      target/release/i3more-audio target/release/i3more-launcher dist/"
+
+# i3more-lock — opts in pam-sys via the `lock` feature.
+docker compose run --rm dev bash -c \
+  "cargo build --release --features lock --bin i3more-lock && \
+   cp target/release/i3more-lock dist/"
+
+# i3more-speech-text — needs the CUDA-equipped `whisper-build` container.
+docker compose run --rm whisper-build bash -c \
+  "cargo build --release --features speech-text --bin i3more-speech-text && \
+   cp target/release/i3more-speech-text dist/"
 ```
 
 See [docs/build.md](docs/build.md) for full build and development setup.
 
 ## Binaries
 
-| Binary             | Description                                                             |
-| ------------------ | ----------------------------------------------------------------------- |
-| `i3more`           | Main bar — workspace navigator, system tray, notifications, system info |
-| `i3more-translate` | Standalone translation popup                                            |
-| `i3more-audio`     | Volume control & audio device switching                                 |
-| `i3more-launcher`  | App search & launch                                                     |
+| Binary                | Description                                                                       |
+| --------------------- | --------------------------------------------------------------------------------- |
+| `i3more`              | Main bar — workspace navigator, system tray, notifications, system info, control panel (incl. speech-text widget) |
+| `i3more-translate`    | Standalone translation popup                                                      |
+| `i3more-audio`        | Volume control & audio device switching                                           |
+| `i3more-launcher`     | App search & launch                                                               |
+| `i3more-lock`         | Lock screen (PAM-backed; `--features lock`)                                       |
+| `i3more-speech-text`  | Real-time German→English speech-to-text from a Bluetooth headset (whisper.cpp / CUDA via whisper-rs; `--features speech-text`; built in the `whisper-build` container) |
+
+Cargo features (declared in `Cargo.toml`, all default-off):
+
+- `speech-text` — pulls in `whisper-rs` (CUDA) + `pipewire`. Required only for `i3more-speech-text`.
+- `lock` — pulls in `pam-client` (and its libclang/bindgen chain). Required only for `i3more-lock`.
+- Everything else builds with no features at all.
 
 ## Documentation
 
@@ -61,6 +88,17 @@ See [docs/build.md](docs/build.md) for full build and development setup.
 - [10 - App Search / Launcher](docs/plan/10-util-appsearch.md)
 - [11 - Logging](docs/plan/11-logs.md)
 - [12 - Background Selector](docs/plan/12-util-change-background.md)
+- [Speech-to-Text (whisper.cpp / CUDA / streaming)](docs/plan/speech-text.md)
+- [Control Panel (incl. speech-text widget)](docs/plan/control-panel.md)
+
+### Reference
+
+- [NVIDIA Container Toolkit](docs/reference/nvidia-container-toolkit.md) — host prerequisite for the GPU-accelerated whisper build.
+
+### Vendored / linked sources
+
+- `vendor/whisper.cpp/` — whisper.cpp git submodule pinned at `v1.7.6`. Built with CUDA into `whisper-stream`, `whisper-cli`, and statically linked into `libwhisper-rs` for `i3more-speech-text`.
+- `reference/linux/` → symlink to `~/projects/linux` (Linux kernel source). Read-only reference for kernel-level IPC primitives (`eventfd`, `signalfd`, `timerfd`, `memfd_create`, `io_uring`, `epoll`, Unix-domain `SOCK_SEQPACKET`, etc.) referenced by the speech-text streaming plan and any future low-latency / event-loop work.
 
 ## Known Issues
 

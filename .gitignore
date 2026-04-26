@@ -21,3 +21,9 @@ Thumbs.db
 # Claude
 .claude/
 linbus/target
+
+# Symlink to the Linux kernel source at ~/projects/linux — see README.md
+# §"Vendored / linked sources" and docs/plan/speech-text.md §"Streaming
+# architecture (v2) → Linux kernel IPC primitives". Reference-only, never
+# committed.
+reference/linux

@@ -1,0 +1,35 @@
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config git ca-certificates curl \
+      libsdl2-dev \
+      # clang + libclang — bindgen (used by pam-sys and whisper-rs-sys) needs
+      # dlopen("libclang.so") to succeed. The meta `clang` package installs the
+      # unversioned symlinks that the bare `libclang-dev` package misses.
+      clang libclang-dev \
+      # GTK4 + friends — pulled in transitively because the i3more lib crate
+      # aggregates several GTK modules; needed even when building the non-GUI
+      # i3more-speech-text binary until gtk is feature-gated in lib.rs.
+      libgtk-4-dev libglib2.0-dev libgraphene-1.0-dev \
+      libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev \
+      libdbus-1-dev libx11-dev libxcb1-dev libpam0g-dev \
+      # PipeWire client lib — needed for S1 (direct PipeWire capture replacing
+      # the parec subprocess). Brings libspa-0.2-dev transitively.
+      libpipewire-0.3-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig
+
+# Rust toolchain — needed for whisper-rs (CUDA feature) inside this container.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# clang-sys (used by pam-sys / bindgen) doesn't auto-find libclang on Ubuntu
+# 24.04 without LIBCLANG_PATH set; also add the dir to LD_LIBRARY_PATH so
+# dlopen("libclang.so") resolves at runtime.
+ENV LIBCLANG_PATH=/usr/lib/llvm-18/lib
+ENV LD_LIBRARY_PATH=/usr/lib/llvm-18/lib
+
+WORKDIR /src
+CMD ["bash"]

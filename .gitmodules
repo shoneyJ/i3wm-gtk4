@@ -16,3 +16,6 @@
 [submodule "reference/jLink"]
 	path = reference/jLink
 	url = https://github.com/Watchdog0x/jLink.git
+[submodule "vendor/whisper.cpp"]
+	path = vendor/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp

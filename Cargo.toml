@@ -27,6 +27,7 @@ path = "src/workspace_main.rs"
 [[bin]]
 name = "i3more-lock"
 path = "src/lock_main.rs"
+required-features = ["lock"]
 
 [[bin]]
 name = "i3more-popup-translate"
@@ -48,6 +49,11 @@ path = "src/keyhint_main.rs"
 name = "i3more-window"
 path = "src/window_main.rs"
 
+[[bin]]
+name = "i3more-speech-text"
+path = "src/speech_text_main.rs"
+required-features = ["speech-text"]
+
 [dependencies]
 gtk4 = "0.10"
 gdk4-x11 = "0.10"
@@ -63,5 +69,22 @@ env_logger = "0.11"
 x11rb = { version = "0.13", features = ["randr"] }
 zeroize = { version = "1", features = ["derive"] }
 nix = { version = "0.29", features = ["process", "signal"] }
-pam-client = "0.5"
+pam-client = { version = "0.5", optional = true }
 libc = "0.2"
+whisper-rs = { version = "0.14", default-features = false, features = ["cuda"], optional = true }
+pipewire = { version = "0.9", features = ["v0_3_77"], optional = true }
+
+[features]
+# Default feature set is empty so `cargo build` in either container
+# produces only the binaries the container can actually link.
+#
+# - `cargo build --bin i3more` (dev container, no GPU/CUDA) just works.
+# - `cargo build --bin i3more-lock --features lock` (dev container) opts
+#   the pam-sys + libclang chain in.
+# - `cargo build --bin i3more-speech-text --features speech-text`
+#   (whisper-build container) opts whisper-rs + pipewire in.
+# - `cargo build --release --features lock,speech-text` builds everything
+#   (only sane in the whisper-build container).
+default = []
+lock = ["dep:pam-client"]
+speech-text = ["dep:whisper-rs", "dep:pipewire"]

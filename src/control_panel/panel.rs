@@ -123,6 +123,14 @@ impl ControlPanel {
         );
         sections.append(&bg_section);
 
+        // Speech-to-text section.
+        let stt_section = build_section(
+            "Speech-to-Text",
+            crate::fa::MICROPHONE,
+            super::widgets::speech_text::build_widget(),
+        );
+        sections.append(&stt_section);
+
         // Scrollable content
         let scrolled = gtk4::ScrolledWindow::new();
         scrolled.set_policy(gtk4::PolicyType::Never, gtk4::PolicyType::Automatic);

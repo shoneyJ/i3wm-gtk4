@@ -5,6 +5,8 @@ pub mod fa;
 pub mod icon;
 pub mod ipc;
 pub mod launcher;
+#[cfg(feature = "speech-text")]
+pub mod speech_text;
 pub mod translate;
 
 use std::path::PathBuf;
