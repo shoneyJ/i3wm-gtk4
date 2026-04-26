@@ -1,0 +1,147 @@
+/* Gruvbox-dark palette, mirroring assets/translate.css. */
+
+window {
+    background-color: #1d2021;
+    color: #ebdbb2;
+}
+
+.stt-top-bar {
+    border-bottom: 1px solid #3c3836;
+}
+
+/* Two declarations are intentional throughout this file:
+   `background: none` clears the GTK theme's default gradient/image on
+   the widget; `background-color` then paints our flat colour. With only
+   the second one set, theme gradients (e.g. the default Adwaita button
+   bevel) paint on top and the widget appears washed-out / white. Same
+   pattern as `assets/translate.css`. */
+
+.stt-toggle {
+    background: none;
+    background-color: #458588;
+    color: #ebdbb2;
+    border: 1px solid #076678;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-weight: bold;
+}
+
+/* GTK4 doesn't propagate Button { color } onto its inner Label; target
+   the label explicitly. */
+.stt-toggle label {
+    color: #ebdbb2;
+}
+
+.stt-toggle:hover {
+    background: none;
+    background-color: #689d6a;
+    border-color: #427b58;
+}
+
+.stt-toggle:hover label {
+    color: #fbf1c7;
+}
+
+.stt-toggle:disabled {
+    background: none;
+    background-color: #3c3836;
+    border-color: #3c3836;
+}
+
+.stt-toggle:disabled label {
+    color: #665c54;
+}
+
+.stt-session-entry {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+.stt-session-entry text {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+}
+
+.stt-session-entry:disabled {
+    color: #928374;
+}
+
+.stt-history-btn {
+    background: none;
+    background-color: #282828;
+    color: #ebdbb2;
+    border: 1px solid #3c3836;
+    border-radius: 4px;
+    padding: 6px 10px;
+}
+
+.stt-history-btn label {
+    color: #ebdbb2;
+}
+
+.stt-history-btn:hover {
+    background: none;
+    background-color: #3c3836;
+}
+
+.stt-history-btn:hover label {
+    color: #ffffff;
+}
+
+.stt-status {
+    color: #928374;
+    font-size: 0.9em;
+    padding: 2px 0;
+}
+
+.stt-list-de,
+.stt-list-en,
+.stt-history-list {
+    background-color: #1d2021;
+}
+
+/* Top pane (German) — primary text colour. */
+.stt-list-de row {
+    border-bottom: 1px solid #282828;
+}
+
+.stt-de {
+    color: #ebdbb2;
+    font-size: 1.0em;
+}
+
+/* Bottom pane (English) — slightly muted, italic. */
+.stt-list-en {
+    background-color: #1d2021;
+}
+
+.stt-list-en row {
+    border-bottom: 1px solid #282828;
+}
+
+.stt-en {
+    color: #a89984;
+    font-style: italic;
+    font-size: 0.95em;
+}
+
+/* Divider between the two panes — subtle. */
+.stt-paned > separator {
+    background-color: #3c3836;
+    min-height: 2px;
+}
+
+scrollbar slider {
+    background-color: #504945;
+    min-width: 8px;
+    border-radius: 4px;
+}
+
+scrollbar slider:hover {
+    background-color: #665c54;
+}

@@ -54,6 +54,10 @@ name = "i3more-speech-text"
 path = "src/speech_text_main.rs"
 required-features = ["speech-text"]
 
+[[bin]]
+name = "i3more-speech-text-ui"
+path = "src/speech_text_ui_main.rs"
+
 [dependencies]
 gtk4 = "0.10"
 gdk4-x11 = "0.10"

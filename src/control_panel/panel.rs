@@ -122,14 +122,9 @@ impl ControlPanel {
             super::widgets::background::build_widget(),
         );
         sections.append(&bg_section);
-
-        // Speech-to-text section.
-        let stt_section = build_section(
-            "Speech-to-Text",
-            crate::fa::MICROPHONE,
-            super::widgets::speech_text::build_widget(),
-        );
-        sections.append(&stt_section);
+        // Note: speech-to-text moved out to its own standalone GTK4 app
+        // (`i3more-speech-text-ui`) — productivity feature, not a system
+        // control. Launchable from i3more-launcher (mod+space).
 
         // Scrollable content
         let scrolled = gtk4::ScrolledWindow::new();

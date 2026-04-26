@@ -3,4 +3,3 @@
 pub mod volume;
 pub mod backlight;
 pub mod background;
-pub mod speech_text;
