@@ -19,20 +19,28 @@ Phases run twice in this doc. The original Phases 0–8 (chunked tumble-window v
 | 0      | Ground truth — whisper-stream on GPU | **Done**      | CUDA build at `vendor/whisper.cpp/build/`; `ggml-base.bin` downloaded.                 |
 | 1      | Shell-level audio pipeline           | **Done**      | Validated via `parecord` → WAV → `whisper-cli`. (whisper-stream + SDL2 path was dead-end on PipeWire.) |
 | 2      | Rust process plumbing (headless)     | **Done**      | `i3more-speech-text` CLI; `parec` subprocess + in-process `whisper-rs` (CUDA).         |
-| 3      | GTK4 shell                           | Pending       | Replaced by S5/S7 + future control-panel widget.                                       |
-| 4      | Live transcript rendering (GTK)      | Pending       | Folded into the control-panel widget; CLI stays the source of truth.                    |
+| 3      | GTK4 shell                           | **Done**      | Standalone binary `i3more-speech-text-ui` (`src/speech_text_ui_main.rs`). Single-instance via `com.i3more.speechtext`; launched via `mod+space` thanks to `assets/i3more-speech-text-ui.desktop`. |
+| 4      | Live transcript rendering (GTK)      | **Done**      | Vertical `gtk4::Paned` with German top / English bottom (no timestamps). `gio::FileMonitor` tails the active session's `.md` and auto-scrolls both panes on append. History popover lists past sessions. |
 | 5      | Inline English translation           | **Done**      | `maybe_translate` via `trans` CLI; only Final segments translated; transcript format `- **HH:MM:SS** — de\n  - _en_`. |
 | 6      | Persistence                          | Pending       | Subsumed by Phase 6.5.                                                                 |
 | 6.5    | Session metadata + post-process hook | **Done (v1)** | `--session=<name>` / `I3MORE_STT_SESSION` → `~/.local/share/i3more/stt/<date>/<name>.md`; front-matter; append-with-separator on re-use. |
 | 7      | Bluetooth profile resilience         | Superseded    | See **7-prime** below.                                                                 |
-| 8      | Polish                               | Pending       | Belongs with the control-panel widget.                                                 |
+| 8      | Polish                               | Partial       | Gruvbox-dark CSS uses the `background: none; background-color: …` pair to override Adwaita gradients. Remaining: keyboard shortcuts, system-tray icon. |
 | **7-prime** | Multi-backend capture + auto-switch | **Done**  | parec backend default; pipewire opt-in. Supervisor in `src/speech_text/capture.rs` runs `pactl subscribe` and respawns the backend on every default-sink change. |
 | S1     | Direct PipeWire client capture       | **Done (A2DP only)** | Native client works on A2DP; silent on HSP/HFP due to PipeWire 1.0.5 bug. Therefore opt-in (`capture_backend = "pipewire"`). |
 | S2     | Sliding window inference             | **Done**      | length=8000 ms / step=1500 ms; Provisional & Final segment kinds; `strip_common_prefix`; speech-end commit via `vad::is_speech_end`. |
 | S3     | VAD silence + hallucination filter   | **Done**      | `vad::is_chunk_silent` gates inference (mean \|s\| < 0.003). FullParams hardened (`no_speech_thold=0.6`, `suppress_blank`, `temperature=0`, `no_context`). `is_hallucination` drops residual `[Musik]`/`[Applaus]`/`...` lines. |
 | S4–S7  | Remaining streaming work             | Pending       | eventfd dispatch, UDS broadcast, epoll loop, TUI follower. See *Streaming architecture (v2)*. |
 
-The phases that are now "Pending" but UI-shaped (3, 4, 5, 8) were originally framed around a standalone GTK4 window. Direction has shifted: live UI lands inside the i3More **control panel** widget (`docs/plan/control-panel.md` §"speech-text — control panel integration"), and the headless CLI + Sx streaming layer is the reusable backend.
+The UI-shaped phases (3, 4) were briefly considered for the i3More
+**control panel** but moved out: speech-to-text is a productivity
+feature, not a system control. The live UI now lives in a standalone
+GTK4 binary `i3more-speech-text-ui` (`src/speech_text_ui_main.rs`,
+launched from `mod+space` via the `.desktop` entry). The headless CLI
++ Sx streaming layer remains the reusable backend; the UI shells out
+to it and tails its on-disk transcript via `gio::FileMonitor`. The
+control-panel widget code is deleted (commit history references
+`src/control_panel/widgets/speech_text.rs`).
 
 ## Architecture
 
@@ -538,6 +546,12 @@ Each phase is an independently commit-able, manually-testable increment. Do not 
 
 ## Streaming architecture (v2 — supersedes the chunked pipeline for Phases 7+)
 
+> **Companion document:** `docs/plan/speech-text-streaming.mdd` — process /
+> thread topology, audio + output data paths, kernel-IPC primitives in use,
+> lifecycle sequence diagrams (startup, default-sink change, shutdown),
+> phase mapping table, and failure-mode catalogue. Read this for a visual
+> view of the runtime; the prose phases below describe the build order.
+
 The Phase 2 pipeline (parec subprocess → 5 s tumble window → whisper-rs `state.full()` → mpsc → stdout/file) works but is **not streaming**. Each output line lags behind speech by the full 5 s buffer, mid-chunk speech is invisible, and silence chunks emit `* Musik *` hallucinations.
 
 This section reshapes the pipeline into a true streaming flow, mirroring (and going beyond) `vendor/whisper.cpp/examples/stream/stream.cpp`. It is decomposed into seven phases (S1–S7). Each is independently shippable; together they replace the audio-capture, inference-dispatch, and output-fanout layers of the current code.
@@ -730,6 +744,71 @@ Recommended execution order: **S1 → S2 → S3 → S5 → S7 → S6 → S4** (d
 
 
 
+## Real-time voice — options beyond windowed whisper
+
+Today's pipeline is "windowed full inference with overlap commit" (S2 +
+S3) running whisper-small on CUDA at ~0.2 s per 8 s window. That's the
+canonical *local* streaming pattern. Realistic alternatives if we want
+tighter end-to-end latency:
+
+| Option | Type | First-word latency | Trade-off |
+|---|---|---|---|
+| `whisper_streaming` (Macháček et al.) | Same model, smarter VAD-anchored commit + LocalAgreement-2 | ~0.5 s | No new model deps. Python project; Rust port or subprocess. |
+| **faster-whisper** (CTranslate2) | Drop-in optimised inference, 4–8× faster | ~0.05 s / 8 s window | Best speed-up for free. Switch from `whisper-rs` to a CTranslate2 binding. |
+| NVIDIA Riva (local) | Streaming ASR | ~150 ms | Heavy install (~10 GB), commercial-licence-restricted. |
+| Vosk | Kaldi-based, native streaming | ~200 ms | Lower quality than whisper-small; better for commands than narration. |
+| DeepGram Nova-3 / AssemblyAI | Cloud streaming | ~250 ms | Sends Teams audio off-device; not OK for the work-call use case. |
+
+**Recommendation.** Adopt LocalAgreement-2 commit semantics inside our
+existing S2 worker (no model change), and consider faster-whisper later
+to claw back GPU headroom for a smaller step interval. Keep whisper —
+the rest of the pipeline (VAD, persistence, translation, UI) is already
+tuned for it.
+
+## Local LLM post-process — ollama as a Claude alternative
+
+The "Summarise with Claude" path in `i3more-speech-text-ui` shells out
+to the `claude` CLI. For a fully-local equivalent, a sibling button can
+run a model via [ollama](https://ollama.com).
+
+| Model | Size | German | Structured output | Pick |
+|---|---|---|---|---|
+| `qwen2.5:7b-instruct` | 4.4 GB | Strong (multilingual) | JSON mode | **Recommended** for German+structured |
+| `llama3.1:8b-instruct` | 4.7 GB | OK (English-leaning) | Function calling | English-leaning use |
+| `gemma2:9b` | 5.5 GB | Strong (Google multilingual) | Solid | Alternative to qwen2.5 |
+| `mistral:7b` | 4.1 GB | OK | Good | Lightweight; less reliable on German |
+
+**Integration sketch.** Add a `summarise_with_ollama()` button next to
+the existing Claude button in `src/speech_text_ui_main.rs`. Either
+`ollama run qwen2.5:7b-instruct …` or POST to
+`http://localhost:11434/api/generate`. ~30 lines of Rust; reuses the
+worker-thread + main-thread-timer plumbing already in place for the
+Claude button.
+
+## Speaker diarisation
+
+Whisper itself does **not** do speaker identification. Three realistic
+paths if the user wants `person1: …`, `person2: …` style output:
+
+1. **whisper.cpp `tinydiarize`** — built-in turn-detection; opt-in via
+   `set_tdrz(true)` on `FullParams`. Inserts a `[SPEAKER_TURN]` marker
+   when it detects a change of speaker. Does **not** name speakers,
+   only detects boundaries. ~5 lines of code; effectively free; useful
+   for paragraph breaks.
+2. **WhisperX** — Python; combines whisper transcription with
+   pyannote.audio diarisation + word-level alignment. Produces
+   `speaker_00: …`, `speaker_01: …`. Requires a HuggingFace token (the
+   pyannote models are gated). Heavy install (~3 GB extra).
+3. **pyannote.audio standalone** — separate diarisation pass on the
+   same audio yielding `(start, end, speaker_id)` segments, merged
+   with whisper's word timestamps. More plumbing than WhisperX but
+   no rewrite of the existing pipeline.
+
+For the Teams-call use case, anonymous speaker labels are usually
+enough. Suggested order of work: **(a)** ship tinydiarize first behind
+a config flag (cheap), **(b)** revisit WhisperX as a *post-process*
+step on stopped sessions (don't try to do diarisation streaming).
+
 ## Out of scope (future work)
 
 - Multi-speaker diarisation.
@@ -739,3 +818,26 @@ Recommended execution order: **S1 → S2 → S3 → S5 → S7 → S6 → S4** (d
 - True token-level streaming via `whisper_encode` + `whisper_decode` directly. The S2/S3 windowed approach is sufficient; full custom decoding is a separate research project.
 
 (Items previously here that are now in scope: voice-activity gating moved to Phase S3; streaming output to Phases S2 / S5 / S7.)
+
+
+## Reference
+
+https://build.nvidia.com/explore/speech
+
+https://github.com/SYSTRAN/faster-whisper
+Whisper
+For reference, here's the time and memory usage that are required to transcribe 13 minutes of audio using different implementations:
+
+openai/whisper@v20240930
+whisper.cpp@v1.7.2
+transformers@v4.46.3
+faster-whisper@v1.1.0
+Large-v2 model on GPU
+Implementation	Precision	Beam size	Time	VRAM Usage
+openai/whisper	fp16	5	2m23s	4708MB
+whisper.cpp (Flash Attention)	fp16	5	1m05s	4127MB
+transformers (SDPA)1	fp16	5	1m52s	4960MB
+faster-whisper	fp16	5	1m03s	4525MB
+faster-whisper (batch_size=8)	fp16	5	17s	6090MB
+faster-whisper	int8	5	59s	2926MB
+faster-whisper (batch_size=8)	int8	5	16s	4500MB

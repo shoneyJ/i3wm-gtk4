@@ -117,11 +117,17 @@ fn default_translate_target() -> String {
 }
 
 fn default_length_ms() -> u32 {
-    8000
+    // 6 s gives whisper enough context for accurate German on the small
+    // model while keeping per-step inference comfortably under
+    // `step_ms` on a single mid-range GPU (~0.15 s observed).
+    6000
 }
 
 fn default_step_ms() -> u32 {
-    1500
+    // 700 ms makes the LocalAgreement-2 commit loop visible to the user
+    // ~twice as often as the old 1500 ms tumble, halving perceived
+    // latency while still leaving ~500 ms inference headroom.
+    700
 }
 
 fn default_vad_thold() -> f32 {
@@ -351,29 +357,25 @@ fn run_worker(
 
     let mut ring: Vec<i16> = Vec::with_capacity(length_samples + 2 * step_samples);
     let mut samples_since_step: usize = 0;
-    let mut prev_text = String::new();
+
+    // LocalAgreement-2 state. `committed_text` is everything we've
+    // already emitted as Final this utterance — it never shrinks.
+    // `prev_hypothesis` is the last whisper hypothesis we saw; comparing
+    // a new hypothesis to it gives us the new "agreed" prefix to commit.
+    let mut committed_text = String::new();
+    let mut prev_hypothesis = String::new();
 
     loop {
         if crate::shutdown_requested() {
             log::info!("shutdown flag set; worker exiting");
-            // Final flush: if there's any pending provisional text, emit
-            // it as Final so the session ends with closed segments.
-            if !prev_text.is_empty() {
-                let captured_at = SystemTime::now();
-                let translation = maybe_translate(&prev_text, &config);
-                append_segment(
-                    &mut transcript,
-                    captured_at,
-                    &prev_text,
-                    translation.as_deref(),
-                );
-                let _ = tx.send(Segment {
-                    at: captured_at,
-                    text: prev_text.clone(),
-                    translation,
-                    kind: SegmentKind::Final,
-                });
-            }
+            // Final flush: emit anything past the already-committed prefix.
+            flush_remaining(
+                &mut transcript,
+                &tx,
+                &mut committed_text,
+                &mut prev_hypothesis,
+                &config,
+            );
             break;
         }
 
@@ -412,15 +414,14 @@ fn run_worker(
             vad::DEFAULT_SILENCE_ENERGY_THOLD,
         ) {
             log::debug!("vad: window silent (mean |s|={:.5})", mean);
-            if !prev_text.is_empty() {
-                emit_final(
-                    &mut transcript,
-                    &tx,
-                    std::mem::take(&mut prev_text),
-                    &config,
-                );
-                ring.clear();
-            }
+            flush_remaining(
+                &mut transcript,
+                &tx,
+                &mut committed_text,
+                &mut prev_hypothesis,
+                &config,
+            );
+            ring.clear();
             continue;
         }
 
@@ -465,9 +466,50 @@ fn run_worker(
             continue;
         }
 
-        // Speech-end detection: did the speaker just pause? If so, lock
-        // the current transcript as Final and reset for the next
-        // utterance.
+        // ---- LocalAgreement-2 commit step --------------------------------
+        //
+        // The longest common prefix between this hypothesis and the
+        // previous one is "agreed" text. We extend `committed_text` to
+        // that agreement WITHOUT writing to disk yet — the file flush
+        // happens once per utterance via `flush_remaining` (silence /
+        // speech-end / SHUTDOWN). This keeps each transcript bullet a
+        // single flowing line of prose and lets us translate the whole
+        // utterance once with proper context, instead of translating
+        // each LA-2 slice in isolation.
+        //
+        // The Provisional emission below still fires every step so a
+        // future in-process subscriber (UI / TUI) can render in-flight
+        // text. None of that touches the on-disk transcript.
+        let agreed = lcp_str(&prev_hypothesis, &text_new);
+        let agreed_words = trim_to_word_boundary(agreed);
+
+        if agreed_words.len() > committed_text.len()
+            && text_new.starts_with(&committed_text)
+        {
+            committed_text = agreed_words.to_string();
+        }
+
+        // Provisional = anything past `committed_text` in the current
+        // hypothesis. The UI replaces the in-flight row each step.
+        let provisional_tail = if text_new.starts_with(&committed_text) {
+            text_new[committed_text.len()..].trim()
+        } else {
+            // Whisper revised the prefix this step — show the full
+            // current hypothesis as Provisional. It'll converge.
+            text_new.as_str()
+        };
+        if !provisional_tail.is_empty() {
+            let _ = tx.send(Segment {
+                at: SystemTime::now(),
+                text: provisional_tail.to_string(),
+                translation: None,
+                kind: SegmentKind::Provisional,
+            });
+        }
+
+        prev_hypothesis = text_new;
+
+        // ---- Speech-end commit -------------------------------------------
         let mut snap_for_vad = snapshot.clone();
         let speech_ended = vad::is_speech_end(
             &mut snap_for_vad,
@@ -478,9 +520,14 @@ fn run_worker(
         );
 
         if speech_ended {
-            log::debug!("vad: speech-end detected; committing Final");
-            emit_final(&mut transcript, &tx, text_new, &config);
-            prev_text.clear();
+            log::debug!("vad: speech-end detected; flushing remaining as Final");
+            flush_remaining(
+                &mut transcript,
+                &tx,
+                &mut committed_text,
+                &mut prev_hypothesis,
+                &config,
+            );
             // Keep last 200 ms as priming for the next utterance.
             if ring.len() > keep_after_commit_samples {
                 let drop_n = ring.len() - keep_after_commit_samples;
@@ -488,20 +535,32 @@ fn run_worker(
             }
             continue;
         }
-
-        // Provisional — emit only the new suffix beyond `prev_text`.
-        let suffix = strip_common_prefix(&text_new, &prev_text);
-        if !suffix.is_empty() {
-            let _ = tx.send(Segment {
-                at: SystemTime::now(),
-                text: suffix.to_string(),
-                translation: None,
-                kind: SegmentKind::Provisional,
-            });
-        }
-        prev_text = text_new;
     }
     Ok(())
+}
+
+/// Close the current utterance: emit the FULL `prev_hypothesis` (which
+/// is the latest whisper output and a superset of `committed_text`) as
+/// a single Final segment, write one bullet line to the transcript,
+/// translate it once, then reset both LA-2 state strings for the next
+/// utterance. Called on VAD speech-end, silent-window, and SHUTDOWN.
+///
+/// This is the only place the transcript file gets written during a
+/// session — keeping each utterance to one bullet line of flowing
+/// German + one bullet of flowing English.
+fn flush_remaining(
+    transcript: &mut std::fs::File,
+    tx: &Sender<Segment>,
+    committed_text: &mut String,
+    prev_hypothesis: &mut String,
+    config: &SpeechTextConfig,
+) {
+    let utterance = prev_hypothesis.trim();
+    if !utterance.is_empty() {
+        emit_final(transcript, tx, utterance.to_string(), config);
+    }
+    committed_text.clear();
+    prev_hypothesis.clear();
 }
 
 /// Translate (synchronous) and emit a Final Segment, also writing it to
@@ -541,18 +600,33 @@ fn maybe_translate(text: &str, config: &SpeechTextConfig) -> Option<String> {
     }
 }
 
-/// Return the suffix of `new` that is not a prefix of `prev`. UTF-8-safe.
-/// If `new` does not extend `prev` (e.g. whisper revised earlier text),
-/// returns the whole of `new` so the caller can show the revised line.
-fn strip_common_prefix<'a>(new: &'a str, prev: &str) -> &'a str {
-    if prev.is_empty() {
-        return new;
+/// Longest common prefix of `a` and `b`, UTF-8-safe (back up to a char
+/// boundary if the byte-level match cuts a multibyte codepoint).
+/// Returned as a slice of `a`.
+fn lcp_str<'a>(a: &'a str, b: &str) -> &'a str {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    let mut i = 0;
+    while i < a_bytes.len() && i < b_bytes.len() && a_bytes[i] == b_bytes[i] {
+        i += 1;
     }
-    if new.starts_with(prev) {
-        let rest = &new[prev.len()..];
-        return rest.trim_start();
+    while i > 0 && !a.is_char_boundary(i) {
+        i -= 1;
     }
-    new
+    &a[..i]
+}
+
+/// Trim `s` to the last word boundary so we never commit a partial
+/// word as Final. If there is no whitespace at all, returns "" (we
+/// haven't accumulated a complete word yet — keep waiting).
+fn trim_to_word_boundary(s: &str) -> &str {
+    if s.is_empty() {
+        return "";
+    }
+    match s.rfind(char::is_whitespace) {
+        Some(pos) => &s[..pos],
+        None => "",
+    }
 }
 
 /// Match a small set of whisper-on-silence hallucinations that the VAD
