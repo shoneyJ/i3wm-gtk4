@@ -173,3 +173,28 @@ popover modelbutton:disabled {
 .mic-indicator:hover {
     opacity: 1;
 }
+
+/* whisper-stt state pill — populated by src/whisper_stt_indicator.rs.
+ * Container is hidden whenever whisperd isn't running; visible classes
+ * (whisper-stt-state-*) are applied to the inner label, which gets its
+ * colour from the inline Pango markup. The class hooks below are mostly
+ * for future styling (pulse on listening, fade on idle, etc.). */
+.whisper-stt-indicator {
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+}
+
+.whisper-stt-state-idle {
+    opacity: 0.55;
+}
+
+.whisper-stt-state-listening,
+.whisper-stt-state-transcribing,
+.whisper-stt-state-error {
+    opacity: 1;
+}
+
+.whisper-stt-indicator:hover {
+    opacity: 1;
+}

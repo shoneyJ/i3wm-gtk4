@@ -13,6 +13,7 @@ mod notify;
 mod sequencer;
 mod sysinfo;
 mod tray;
+mod whisper_stt_indicator;
 
 use gtk4::glib;
 use gtk4::prelude::*;

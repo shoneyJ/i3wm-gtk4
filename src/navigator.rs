@@ -143,12 +143,16 @@ pub fn build_navigator(
     // Mic mute indicator (only visible when a mic source exists)
     let mic_handles = crate::mic_indicator::build_mic_indicator();
 
-    // Right side: tray icons + mic indicator + sliders icon + bell
+    // whisper-stt state pill (only visible when whisperd is running)
+    let whisper_stt_handles = crate::whisper_stt_indicator::build_whisper_stt_indicator();
+
+    // Right side: tray icons + mic indicator + whisper-stt + sliders icon + bell
     let right_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     right_box.set_halign(gtk4::Align::End);
     right_box.set_valign(gtk4::Align::Center);
     right_box.append(&tray_box);
     right_box.append(&mic_handles.container);
+    right_box.append(&whisper_stt_handles.container);
     right_box.append(&cp_overlay);
     right_box.append(&bell_overlay);
 

@@ -90,6 +90,37 @@ impl IconResolver {
         result
     }
 
+    /// Resolve, refreshing the .desktop index once if the first pass misses.
+    /// Used so apps whose .desktop is installed after navigator start still get icons.
+    fn resolve_full(&mut self, wm_class_lower: &str) -> IconResult {
+        let mut icon_name = self.find_icon_name(wm_class_lower);
+        if icon_name.is_none() {
+            self.refresh_desktop_index();
+            icon_name = self.find_icon_name(wm_class_lower);
+        }
+        self.icon_name_to_result(icon_name)
+    }
+
+    fn icon_name_to_result(&self, icon_name: Option<String>) -> IconResult {
+        match icon_name {
+            Some(name) if name.is_empty() => IconResult::NotFound,
+            Some(name) => {
+                if name.starts_with('/') {
+                    let path = PathBuf::from(&name);
+                    if path.exists() {
+                        return IconResult::FilePath(path);
+                    }
+                    return IconResult::NotFound;
+                }
+                if let Some(path) = resolve_icon_in_theme(&name) {
+                    return IconResult::FilePath(path);
+                }
+                IconResult::IconName(name)
+            }
+            None => IconResult::NotFound,
+        }
+    }
+
     /// Batch-resolve multiple classes. Returns a map of class -> IconResult.
     pub fn resolve_batch(&mut self, classes: &[String]) -> HashMap<String, IconResult> {
         let mut results = HashMap::new();
@@ -104,32 +135,6 @@ impl IconResolver {
     pub fn refresh_desktop_index(&mut self) {
         self.desktop_files = find_desktop_files();
         self.desktop_index = build_desktop_index(&self.desktop_files);
-    }
-
-    fn resolve_full(&self, wm_class_lower: &str) -> IconResult {
-        // Search .desktop files for a matching entry
-        let icon_name = self.find_icon_name(wm_class_lower);
-
-        match icon_name {
-            Some(name) if name.is_empty() => IconResult::NotFound,
-            Some(name) => {
-                // If it's already an absolute path, use it directly
-                if name.starts_with('/') {
-                    let path = PathBuf::from(&name);
-                    if path.exists() {
-                        return IconResult::FilePath(path);
-                    }
-                    return IconResult::NotFound;
-                }
-                // Try to resolve via icon theme directories
-                if let Some(path) = resolve_icon_in_theme(&name) {
-                    return IconResult::FilePath(path);
-                }
-                // Return as icon name — GTK can try theme lookup at render time
-                IconResult::IconName(name)
-            }
-            None => IconResult::NotFound,
-        }
     }
 
     fn find_icon_name(&self, wm_class_lower: &str) -> Option<String> {
@@ -173,7 +178,10 @@ impl IconResolver {
         let content = content.trim();
 
         if content.is_empty() {
-            return Some(IconResult::NotFound);
+            // Legacy negative cache from older code. Drop it so callers re-resolve;
+            // a .desktop file installed after the original lookup should now match.
+            let _ = fs::remove_file(&path);
+            return None;
         }
 
         // Check if the cached path/name still exists
@@ -191,13 +199,14 @@ impl IconResolver {
     }
 
     fn write_disk_cache(&self, key: &str, result: &IconResult) {
-        let path = self.disk_cache_path(key);
+        // Only persist positive results. Negatives stay in the in-memory LRU for the
+        // session, so apps whose .desktop is installed later still get re-checked.
         let content = match result {
-            IconResult::IconName(name) => name.as_str().to_string(),
+            IconResult::IconName(name) => name.clone(),
             IconResult::FilePath(p) => p.to_string_lossy().to_string(),
-            IconResult::NotFound => String::new(),
+            IconResult::NotFound => return,
         };
-        let _ = fs::write(path, content);
+        let _ = fs::write(self.disk_cache_path(key), content);
     }
 }
 

@@ -110,7 +110,7 @@ Bluetooth headsets expose different sinks per profile, and the name changes when
 | A2DP (stereo)      | Media playback, no mic | `bluez_output.XX_XX_XX_XX_XX_XX.a2dp-sink`           |
 | HSP/HFP (mono)     | Calls, mic enabled     | `bluez_output.XX_XX_XX_XX_XX_XX.headset-head-unit`   |
 
-Both belong to the same device but appear as distinct sinks in `pactl list sinks`. The feature must follow the profile switch — otherwise transcription silently dies the moment a Teams call opens.
+Both belong to the same device but appear as distinct sinks in `pactl list sinks`. The feature must foqllow the profile switch — otherwise transcription silently dies the moment a Teams call opens.
 
 ### Resolving the Jabra sink
 
@@ -122,7 +122,7 @@ Both belong to the same device but appear as distinct sinks in `pactl list sinks
 
 The capture mechanism evolved as we hit dead-ends:
 
-| Phase | Mechanism                                          | Status   | Notes                                                                                  |
+| Phase | Mechanism           q      q                         | Status   | Notes                                                                                  |
 | ----- | -------------------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
 | 1     | `parecord` → WAV → `whisper-cli`                   | Smoke-test only | Off-line, used only to validate the audio actually flows.                       |
 | 2     | `parec` subprocess (stdout pipe) → `whisper-rs`    | **Current** | Resolves Jabra by `pactl list sinks` description match; in-process whisper-rs. Tumble window. |
