@@ -45,6 +45,18 @@ services:
               count: all
               capabilities: [compute, utility]
 
+  # Builds the forked i3 at vendor/i3 (see docs/plan/dynamicWM.md).
+  # Separate image so the i3 build chain (libev, libyajl, libxcb-*) doesn't
+  # bloat the `dev` image used by the main Rust build.
+  i3-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.i3
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: bash
+
 volumes:
   cargo-registry:
   cargo-target:
