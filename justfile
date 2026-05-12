@@ -112,3 +112,54 @@ i3-deploy: i3-install i3-restart
 # Wipe vendor/i3/build entirely (inside container — build tree is root-owned)
 i3-clean:
     docker compose run --rm i3-build rm -rf {{i3_build}}
+
+# ============================================================================
+# i3More bar (src/main.rs → dist/i3more) — the GTK4 navigator + sysinfo bar.
+#
+# Launched from i3 config:
+#   exec_always --no-startup-id killall i3more 2>/dev/null; \
+#     exec ~/projects/github/shoneyj/i3More/dist/i3more
+# so `i3-msg reload` re-execs whatever sits at dist/i3more.
+# ============================================================================
+
+bar_bin     := "dist/i3more"
+bar_log     := "$HOME/.cache/i3more/i3more.log"
+
+# --- compile the bar --------------------------------------------------------
+
+# cargo build --release --bin i3more inside the dev container
+bar-build:
+    docker compose run --rm dev cargo build --release --bin i3more
+
+# --- install / restart on the host ------------------------------------------
+
+# Build + kill running bar + cp release binary into dist/
+bar-install: bar-build
+    @killall i3more 2>/dev/null || true
+    docker compose run --rm dev cp --remove-destination \
+        target/release/i3more /app/{{bar_bin}}
+    @ls -la {{bar_bin}}
+
+# i3-msg reload — exec_always in the i3 config relaunches the bar
+bar-restart:
+    i3-msg reload
+
+# Full pipeline: build → cp → reload i3 so the bar re-exec's
+bar-deploy: bar-install bar-restart
+
+# --- runtime ----------------------------------------------------------------
+
+# Show whether the bar is running + binary mtime
+bar-status:
+    @printf 'Binary  : %s\n' "$(ls -la {{bar_bin}} 2>/dev/null || echo 'not built')"
+    @printf 'Process : %s\n' "$(pgrep -af '{{bar_bin}}$' 2>/dev/null || echo '(not running)')"
+
+# Tail the bar log
+bar-logs:
+    tail -f {{bar_log}}
+
+# --- cleanup ----------------------------------------------------------------
+
+# Drop the cargo target volume entry for the bar — forces full rebuild
+bar-clean:
+    docker compose run --rm dev cargo clean -p i3more

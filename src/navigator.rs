@@ -4,6 +4,7 @@
 //! and application icons. Clicking a workspace switches to it.
 
 use i3more::icon::{IconResolver, IconResult};
+use crate::layout_indicator::LayoutIndicator;
 use crate::model::WorkspaceInfo;
 use gtk4::gdk;
 use gtk4::glib;
@@ -24,6 +25,7 @@ pub struct NavigatorState {
 pub struct SysinfoLabels {
     pub clock: gtk4::Label,
     pub battery: gtk4::Label,
+    pub layout: Rc<LayoutIndicator>,
 }
 
 /// Handles for the notification bell icon in the bar.
@@ -102,6 +104,10 @@ pub fn build_navigator(
         sysinfo_box.append(&battery_label);
     }
 
+    // Layout indicator — hidden until first tree refresh fills it in
+    let layout_indicator = Rc::new(LayoutIndicator::new());
+    sysinfo_box.append(&layout_indicator.container);
+
     // Clock label
     let clock_label = gtk4::Label::new(Some(&crate::sysinfo::read_clock()));
     clock_label.add_css_class("sysinfo-label");
@@ -127,6 +133,7 @@ pub fn build_navigator(
     let sysinfo_labels = SysinfoLabels {
         clock: clock_label,
         battery: battery_label,
+        layout: layout_indicator,
     };
 
     // Control panel (sliders) icon

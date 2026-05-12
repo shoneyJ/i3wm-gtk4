@@ -37,6 +37,10 @@ pub const SLIDERS: char = '\u{f1de}';
 pub const MICROPHONE: char = '\u{f130}';
 pub const MICROPHONE_SLASH: char = '\u{f131}';
 pub const KEYBOARD: char = '\u{f11c}';
+pub const TABLE_COLUMNS: char = '\u{f0db}';
+pub const GRIP_LINES: char = '\u{f7a4}';
+pub const CLONE: char = '\u{f24d}';
+pub const LAYER_GROUP: char = '\u{f5fd}';
 
 /// Wrap an FA glyph in Pango markup with color and size.
 pub fn fa_icon(icon: char, color: &str, size_pt: u32) -> String {

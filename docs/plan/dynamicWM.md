@@ -340,3 +340,172 @@ new dependencies — uses existing `x11rb`, `gtk4`, `serde_json`, `i3more::ipc`.
 - For level 5, can `move container to workspace` plus geometry suffice, or
   does the floating-to-tile transition need a fresh container that only a fork
   can construct cleanly?
+
+## BUG
+
+### Bug 1 — Maximize on VSCode → all subsequent windows open as tabs
+
+**Repro**
+
+1. Workspace with one VSCode window in a splith/splitv parent.
+2. Click VSCode's native titlebar maximize button.
+3. Open any new window (terminal, browser) on the same workspace.
+
+**Observed**: every new window arrives as a tab next to VSCode.
+
+**Root cause**
+
+Feature A's patch in `vendor/i3/src/handlers.c` does
+`con_set_layout(parent, L_TABBED)` — it mutates the **existing parent**
+in-place. i3 opens new windows as siblings under the focused container's
+parent, so once the parent is tabbed, every new sibling becomes a tab.
+Working as coded; surprising as UX.
+
+**Fix — wrap, don't mutate**
+
+Replace the `con_set_layout` call with a tree-shape change:
+
+1. Allocate a fresh container `wrap`, set its `layout = L_TABBED`,
+   `last_split_layout = parent->layout`.
+2. Detach the focused con from `parent`; attach it as the sole child of
+   `wrap`.
+3. Attach `wrap` in the focused con's old slot under `parent`.
+4. Store a sentinel mark (`__i3more_maxwrap`) on `wrap` so unmaximize can
+   find it.
+
+Unmaximize (minimize button, or maximize on already-max'd):
+
+1. Find ancestor `wrap` with the sentinel mark on the focused con.
+2. Reparent the single child of `wrap` back to `wrap->parent` in `wrap`'s
+   slot.
+3. Free `wrap`.
+
+Result: siblings keep their original layout, new windows go to the **old**
+parent (still splith/splitv), and the maximized con visually dominates
+because the tabbed wrapper has only one child.
+
+**Files**
+
+| File                              | Change                                  |
+|-----------------------------------|-----------------------------------------|
+| `vendor/i3/src/handlers.c`        | replace `con_set_layout` calls in the `_NET_WM_STATE_MAXIMIZED_*` and `WM_CHANGE_STATE` branches with wrap/unwrap helpers |
+| `vendor/i3/src/con.c` (or new file `con_max_wrap.c`) | implement `con_max_wrap(Con *)` / `con_max_unwrap(Con *)` |
+
+**Validation**
+
+- `wmctrl -r ":ACTIVE:" -b toggle,maximized_vert,maximized_horz` on a
+  tiled window — focused con should fill the workspace, bar stays
+  visible.
+- With the window still maxed, `i3-msg exec xterm` — the new xterm should
+  appear in the **original** layout next to the wrapper, not as a tab
+  inside it.
+- Repeat the wmctrl toggle — wrapper should be gone from `get_tree`
+  output (no node carrying mark `__i3more_maxwrap`).
+
+### Bug 2 — Clicking a tab causes the window to float
+
+**Repro (to confirm)**
+
+1. Workspace with parent `layout: tabbed`, two children A and B, A focused.
+2. Click B's tab header.
+
+**Observed**: B becomes floating.
+
+**Hypothesis**
+
+Not caused by the Feature A patch — `handle_client_message` only matches
+`_NET_WM_STATE_MAXIMIZED_*` and `WM_CHANGE_STATE`. Likely culprits, in
+order of probability:
+
+1. **Drag threshold in `tiling_drag.c`**: a click with sub-pixel motion
+   passes the drag threshold and falls into the floating-conversion path
+   that Levels 2/5 will rework. Stock i3 4.25 reworked
+   `tiling_drag_threshold_reached` — check whether the threshold is now
+   measured in time + distance vs. distance alone, and whether the
+   "drag to detach" code path defaults to floating when the drop target
+   is the source's own parent.
+2. **`click.c` button-press handler** misroutes tab-header clicks because
+   our patch added an event handler earlier in the chain that no longer
+   returns the right "I handled it" sentinel.
+
+**Diagnostic plan**
+
+1. `i3-dump-log` with `--shmlog-size=10M` set in config; reproduce the
+   click and look for `tiling_drag`, `floating_enable`, and any
+   `Received ClientMessage` lines.
+2. `xev -id <tab parent window>` to confirm only Button1 press/release
+   reach i3, no motion in between (rules out drag-threshold theory if
+   true).
+3. `git -C vendor/i3 log --oneline -- src/tiling_drag.c src/click.c`
+   between 4.23 and 4.25-non-git to spot upstream regressions across the
+   version jump.
+
+Defer fix until cause is identified — the wrong patch here is worse than
+no patch.
+
+## feat: per-workspace-layout-View-i3MoreBar
+
+User wants the current workspace's layout (splith / splitv / tabbed /
+stacked) shown on the i3More bar alongside the existing
+[common info](03-common-info.md) widgets. Doubles as the visible cue that
+Bug 1's fix should preserve: even with the wrap-not-mutate fix, the user
+benefits from knowing at a glance "this workspace's root layout is X".
+
+### Scope
+
+- **View only** for this iteration. Toggling layout from the bar is
+  deferred (was an earlier draft, removed).
+- The "layout" shown is the **focused container's parent layout** — i.e.
+  what determines how a *new* window would be inserted. This is the
+  source of Bug 1's surprise, so it's the property worth surfacing.
+
+### UI
+
+Single label/icon in the `sysinfo-area` (left side of the bar), placed
+between battery and clock so the layout state sits with other
+always-visible state. Glyph mapping (Font Awesome 6 Free Solid, already
+loaded — `src/fa.rs`):
+
+| Layout    | Glyph (FA name)         | Tooltip      |
+|-----------|-------------------------|--------------|
+| `splith`  | `table-columns`         | "split horizontal" |
+| `splitv`  | `grip-lines`            | "split vertical"   |
+| `tabbed`  | `folder` (or `clone`)   | "tabbed"     |
+| `stacked` | `layer-group`           | "stacked"    |
+
+Colour `#a89984` to match other sysinfo glyphs; size 11px.
+
+### Data flow
+
+- New thin module `src/layout_indicator.rs`.
+- On startup, do an initial `get_tree`, find focused workspace → focused
+  con → parent → `layout`, set the label.
+- Subscribe (via existing `i3more::ipc`) to:
+  - `workspace::focus`     — workspace switch
+  - `window::focus`        — focus moved between cons
+  - `window::move`         — tree shape may have changed parent
+  - `window::new` / `window::close` — same reason
+- Each event triggers a tree re-query + label update on the GTK main
+  thread (`glib::MainContext::default().invoke_local`).
+
+Cost: one `get_tree` IPC round-trip per relevant event. Negligible.
+
+### Files
+
+| File                          | Action                                  |
+|-------------------------------|-----------------------------------------|
+| `src/layout_indicator.rs`     | create — `build_layout_indicator()` returns the GTK label + an update closure |
+| `src/navigator.rs`            | edit — instantiate label, append into `sysinfo_box` after battery, hook update closure into the existing IPC dispatcher |
+| `src/main.rs`                 | edit — call update on i3 events (alongside the existing clock/battery tick) |
+| `src/lib.rs` / `src/fa.rs`    | edit — add the FA glyph constants if not already exported |
+| `assets/style.css`            | edit — `.layout-indicator { … }` matching `.sysinfo-label` |
+| `docs/plan/03-common-info.md` | edit — note layout indicator alongside battery/clock |
+
+### Open questions
+
+- When focus is on a workspace with no windows, what does the indicator
+  show? Proposal: hide it (no parent layout to display) rather than
+  show a fallback glyph.
+- Multi-monitor: which workspace's layout do we show — the focused one,
+  or one-per-output? Proposal: focused only, since the rest of sysinfo
+  is single-valued.
