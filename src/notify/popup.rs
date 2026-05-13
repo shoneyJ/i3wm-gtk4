@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
 
+use super::dnd::DndFlag;
 use super::render;
 use super::types::{Notification, NotifyEvent};
 
@@ -32,6 +33,7 @@ pub struct PopupManager {
     action_tx: mpsc::Sender<(u32, String)>,
     screen_width: i32,
     app: gtk4::Application,
+    dnd: DndFlag,
 }
 
 impl PopupManager {
@@ -39,6 +41,7 @@ impl PopupManager {
         app: &gtk4::Application,
         close_tx: mpsc::Sender<NotifyEvent>,
         action_tx: mpsc::Sender<(u32, String)>,
+        dnd: DndFlag,
     ) -> Self {
         let display = gdk::Display::default().expect("Could not get display");
         let monitors = display.monitors();
@@ -56,11 +59,16 @@ impl PopupManager {
             action_tx,
             screen_width,
             app: app.clone(),
+            dnd,
         }
     }
 
     /// Show a notification popup. If a popup with the same ID exists, update it
     /// in-place (no window destroy/recreate). Otherwise create a new popup.
+    ///
+    /// When DND is active, new popups are suppressed entirely. An update to an
+    /// already-visible popup still goes through — closing one and re-opening
+    /// it would be more disruptive than letting the existing one update.
     pub fn show(&self, notif: &Notification) {
         let existing_idx = {
             let popups = self.popups.borrow();
@@ -69,7 +77,7 @@ impl PopupManager {
 
         if let Some(idx) = existing_idx {
             self.update_existing(idx, notif);
-        } else {
+        } else if !self.dnd.get() {
             self.create_new(notif);
         }
     }
