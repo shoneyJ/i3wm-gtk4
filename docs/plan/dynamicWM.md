@@ -8,10 +8,10 @@ mouse drags) instead of requiring keyboard shortcuts only. Built on the existing
 
 Two i3 installations coexist on the host once Approach 2 is in flight:
 
-| Path                  | Version          | Source                       | Role                       |
-|-----------------------|------------------|------------------------------|----------------------------|
-| `/usr/bin/i3`         | 4.23 (2023-10-29)| Ubuntu apt (`i3-wm` package) | Stock fallback / current session before swap |
-| `/usr/local/bin/i3`   | 4.25-non-git     | Built from `vendor/i3`       | Patched fork — Feature A + Levels 1–5         |
+| Path                | Version           | Source                       | Role                                         |
+| ------------------- | ----------------- | ---------------------------- | -------------------------------------------- |
+| `/usr/bin/i3`       | 4.23 (2023-10-29) | Ubuntu apt (`i3-wm` package) | Stock fallback / current session before swap |
+| `/usr/local/bin/i3` | 4.25-non-git      | Built from `vendor/i3`       | Patched fork — Feature A + Levels 1–5        |
 
 `PATH` ordering has `/usr/local/bin` before `/usr/bin`, so once the fork is
 installed, `which i3` resolves to the patched binary and `i3-msg restart`
@@ -45,12 +45,12 @@ Two distinct features bundled under one binary:
 
 ## Feature A — Titlebar buttons
 
-| # | Trigger                                  | i3 action (current patch)                                         |
-|---|------------------------------------------|-------------------------------------------------------------------|
-| 1 | Click *maximize* on a tiled window       | `con_set_layout(con, L_TABBED)` — parent flips to tabbed, the focused con dominates the workspace, bar stays visible |
-| 2 | Click *maximize* on an already-max'd win | `con_set_layout(con, parent->last_split_layout)` — back to splith/splitv |
-| 3 | Click *minimize* on a maximized window   | Same as #2 — restore parent to last_split_layout                  |
-| 4 | Click *minimize* on a tiled (split) win  | No-op (parent isn't tabbed/stacked, nothing to restore from)      |
+| #   | Trigger                                  | i3 action (current patch)                                                                                            |
+| --- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 1   | Click _maximize_ on a tiled window       | `con_set_layout(con, L_TABBED)` — parent flips to tabbed, the focused con dominates the workspace, bar stays visible |
+| 2   | Click _maximize_ on an already-max'd win | `con_set_layout(con, parent->last_split_layout)` — back to splith/splitv                                             |
+| 3   | Click _minimize_ on a maximized window   | Same as #2 — restore parent to last_split_layout                                                                     |
+| 4   | Click _minimize_ on a tiled (split) win  | No-op (parent isn't tabbed/stacked, nothing to restore from)                                                         |
 
 We deliberately do **not** map maximize to `fullscreen enable` — that hides the
 bar, which isn't what users mean by "maximize". And we don't map minimize to
@@ -105,25 +105,25 @@ not in the running binary — recheck the md5sum step above.
 
 **Known app caveats:**
 
-| App     | Titlebar buttons emit EWMH?                                          |
-|---------|----------------------------------------------------------------------|
-| VSCode  | Only when `"window.titleBarStyle": "native"`. The default `"custom"` (Electron-drawn) titlebar manipulates window state internally and bypasses the WM. |
-| Firefox / Zen | Yes, when CSD is enabled (default on most distros).            |
-| GNOME GTK apps (gnome-text-editor, nautilus, …) | Yes — standard GTK CSD path. |
-| Qt apps (with native decorations) | Usually yes.                                   |
+| App                                             | Titlebar buttons emit EWMH?                                                                                                                             |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VSCode                                          | Only when `"window.titleBarStyle": "native"`. The default `"custom"` (Electron-drawn) titlebar manipulates window state internally and bypasses the WM. |
+| Firefox / Zen                                   | Yes, when CSD is enabled (default on most distros).                                                                                                     |
+| GNOME GTK apps (gnome-text-editor, nautilus, …) | Yes — standard GTK CSD path.                                                                                                                            |
+| Qt apps (with native decorations)               | Usually yes.                                                                                                                                            |
 
 VSCode under `"custom"` is the most common false-negative for this feature.
 Either switch its title-bar style or test with a GTK CSD app first.
 
 ## Feature B — Dynamic mouse levels
 
-| Lvl | Gesture                                    | Result                                                |
-|-----|--------------------------------------------|-------------------------------------------------------|
-| 1   | Drag a tiling window's edge                | Resize the split / containing parent                  |
-| 2   | Drag window body onto another window       | Swap the two tiling windows                           |
-| 3   | Drag window onto workspace label / monitor | Move window to that workspace                         |
-| 4   | Drag window onto another window's edge     | New split (drop position = split direction)           |
-| 5   | Drag a floating window over a tile zone    | Convert floating ↔ tiling seamlessly                  |
+| Lvl | Gesture                                    | Result                                      |
+| --- | ------------------------------------------ | ------------------------------------------- |
+| 1   | Drag a tiling window's edge                | Resize the split / containing parent        |
+| 2   | Drag window body onto another window       | Swap the two tiling windows                 |
+| 3   | Drag window onto workspace label / monitor | Move window to that workspace               |
+| 4   | Drag window onto another window's edge     | New split (drop position = split direction) |
+| 5   | Drag a floating window over a tile zone    | Convert floating ↔ tiling seamlessly        |
 
 Each level is independently shippable; levels 4 and 5 depend on the drop-zone
 infrastructure from level 2.
@@ -133,7 +133,7 @@ infrastructure from level 2.
 Verify these before reimplementing — partial overlap exists:
 
 - **Resize borders**: `Mod+RightMouse` drag resizes tiling borders. Level 1 is
-  about making this work *without* Mod, on the visible border zone.
+  about making this work _without_ Mod, on the visible border zone.
 - **Swap by drag**: i3 supports dragging a container by its title bar to
   rearrange — limited to its current parent. Level 2 extends this to arbitrary
   drop targets in the tree.
@@ -172,14 +172,14 @@ The fork already lives at `vendor/i3` (submodule pointed at
 `git@github.com:shoneyJ/i3.git`, currently at upstream `4.19.1-non-git`). The
 upstream sources we'd touch:
 
-| Level / Feature | i3 source files (in `vendor/i3/src/`)            |
-|-----------------|--------------------------------------------------|
-| Feature A       | `handlers.c` (X11 ClientMessage), `ewmh.c`       |
-| Level 1         | `resize.c`, `click.c`                            |
-| Level 2         | `tiling_drag.c`, `move.c`                        |
-| Level 3         | `tiling_drag.c`, `workspace.c`                   |
-| Level 4         | `tiling_drag.c`, `con.c` (split insertion)       |
-| Level 5         | `floating.c`, `tiling_drag.c`                    |
+| Level / Feature | i3 source files (in `vendor/i3/src/`)      |
+| --------------- | ------------------------------------------ |
+| Feature A       | `handlers.c` (X11 ClientMessage), `ewmh.c` |
+| Level 1         | `resize.c`, `click.c`                      |
+| Level 2         | `tiling_drag.c`, `move.c`                  |
+| Level 3         | `tiling_drag.c`, `workspace.c`             |
+| Level 4         | `tiling_drag.c`, `con.c` (split insertion) |
+| Level 5         | `floating.c`, `tiling_drag.c`              |
 
 A small `i3more-dwm` helper may still be useful (Feature A is cleaner as an
 external listener even with a forked i3), but Levels 1–5 move inside i3.
@@ -191,11 +191,11 @@ image (`libxcb-util-cursor-dev`, `libev-dev`, `libyajl-dev`, `libstartup-notific
 `libpcre2-dev`, `meson`, `ninja-build` — see `vendor/i3/DEPENDS` for the full
 list).
 
-| File                          | Action                                        |
-|-------------------------------|-----------------------------------------------|
-| `Dockerfile.i3`               | create — Ubuntu 24.04 + i3 build deps + meson |
-| `docker-compose.yaml`         | edit — add `i3-build` service, bind `.:/src`  |
-| `docs/build.md`               | edit — new "Building the forked i3" section   |
+| File                  | Action                                        |
+| --------------------- | --------------------------------------------- |
+| `Dockerfile.i3`       | create — Ubuntu 24.04 + i3 build deps + meson |
+| `docker-compose.yaml` | edit — add `i3-build` service, bind `.:/src`  |
+| `docs/build.md`       | edit — new "Building the forked i3" section   |
 
 Following the same bind-mount pattern as `whisper-build`, no copy to `dist/`:
 the build tree lives at `vendor/i3/build/` on the host. From inside the
@@ -214,7 +214,7 @@ Resulting binaries: `vendor/i3/build/i3`, `vendor/i3/build/i3bar`,
 i3 is a privileged binary at `/usr/bin/i3`. Replacing it needs sudo on the
 host, not inside the container. Two options:
 
-1. **Side-by-side install** *(safer during development)*. Install to
+1. **Side-by-side install** _(safer during development)_. Install to
    `/opt/i3more/` so the system i3 stays as the recoverable fallback. Then add
    an entry to the X session menu (`/usr/share/xsessions/i3more.desktop`)
    pointing at `/opt/i3more/bin/i3`.
@@ -224,7 +224,7 @@ host, not inside the container. Two options:
    # vendor/i3/build is part of the bind mount, so this runs on the host.
    ```
 
-2. **Full replace** *(once stable)*. `sudo meson install -C vendor/i3/build`
+2. **Full replace** _(once stable)_. `sudo meson install -C vendor/i3/build`
    into the default prefix (`/usr/local`), with `/usr/local/bin` ahead of
    `/usr/bin` on `PATH` so `i3` resolves to the fork.
 
@@ -320,16 +320,16 @@ new dependencies — uses existing `x11rb`, `gtk4`, `serde_json`, `i3more::ipc`.
 
 ## Files
 
-| File                       | Action  |
-|----------------------------|---------|
-| `Cargo.toml`               | edit — add `[[bin]] i3more-dwm` |
-| `src/dwm_main.rs`          | create — entry point + main loop |
-| `src/dwm/x11.rs`           | create — X11 listener (phase 1) |
+| File                       | Action                                       |
+| -------------------------- | -------------------------------------------- |
+| `Cargo.toml`               | edit — add `[[bin]] i3more-dwm`              |
+| `src/dwm_main.rs`          | create — entry point + main loop             |
+| `src/dwm/x11.rs`           | create — X11 listener (phase 1)              |
 | `src/dwm/drag.rs`          | create — pointer grabs + drag FSM (phase 2+) |
-| `src/dwm/tree.rs`          | create — tree helpers (phase 3+) |
-| `src/dwm/overlay.rs`       | create — drop-zone overlay (phase 3+) |
-| `src/lib.rs`               | edit — `pub mod dwm;` |
-| `~/dotfiles/i3/.config/i3` | edit — `exec --no-startup-id i3more-dwm` |
+| `src/dwm/tree.rs`          | create — tree helpers (phase 3+)             |
+| `src/dwm/overlay.rs`       | create — drop-zone overlay (phase 3+)        |
+| `src/lib.rs`               | edit — `pub mod dwm;`                        |
+| `~/dotfiles/i3/.config/i3` | edit — `exec --no-startup-id i3more-dwm`     |
 
 ## Open questions
 
@@ -386,10 +386,10 @@ because the tabbed wrapper has only one child.
 
 **Files**
 
-| File                              | Change                                  |
-|-----------------------------------|-----------------------------------------|
-| `vendor/i3/src/handlers.c`        | replace `con_set_layout` calls in the `_NET_WM_STATE_MAXIMIZED_*` and `WM_CHANGE_STATE` branches with wrap/unwrap helpers |
-| `vendor/i3/src/con.c` (or new file `con_max_wrap.c`) | implement `con_max_wrap(Con *)` / `con_max_unwrap(Con *)` |
+| File                                                 | Change                                                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `vendor/i3/src/handlers.c`                           | replace `con_set_layout` calls in the `_NET_WM_STATE_MAXIMIZED_*` and `WM_CHANGE_STATE` branches with wrap/unwrap helpers |
+| `vendor/i3/src/con.c` (or new file `con_max_wrap.c`) | implement `con_max_wrap(Con *)` / `con_max_unwrap(Con *)`                                                                 |
 
 **Validation**
 
@@ -456,7 +456,7 @@ benefits from knowing at a glance "this workspace's root layout is X".
 - **View only** for this iteration. Toggling layout from the bar is
   deferred (was an earlier draft, removed).
 - The "layout" shown is the **focused container's parent layout** — i.e.
-  what determines how a *new* window would be inserted. This is the
+  what determines how a _new_ window would be inserted. This is the
   source of Bug 1's surprise, so it's the property worth surfacing.
 
 ### UI
@@ -466,12 +466,12 @@ between battery and clock so the layout state sits with other
 always-visible state. Glyph mapping (Font Awesome 6 Free Solid, already
 loaded — `src/fa.rs`):
 
-| Layout    | Glyph (FA name)         | Tooltip      |
-|-----------|-------------------------|--------------|
-| `splith`  | `table-columns`         | "split horizontal" |
-| `splitv`  | `grip-lines`            | "split vertical"   |
-| `tabbed`  | `folder` (or `clone`)   | "tabbed"     |
-| `stacked` | `layer-group`           | "stacked"    |
+| Layout    | Glyph (FA name)       | Tooltip            |
+| --------- | --------------------- | ------------------ |
+| `splith`  | `table-columns`       | "split horizontal" |
+| `splitv`  | `grip-lines`          | "split vertical"   |
+| `tabbed`  | `folder` (or `clone`) | "tabbed"           |
+| `stacked` | `layer-group`         | "stacked"          |
 
 Colour `#a89984` to match other sysinfo glyphs; size 11px.
 
@@ -481,9 +481,9 @@ Colour `#a89984` to match other sysinfo glyphs; size 11px.
 - On startup, do an initial `get_tree`, find focused workspace → focused
   con → parent → `layout`, set the label.
 - Subscribe (via existing `i3more::ipc`) to:
-  - `workspace::focus`     — workspace switch
-  - `window::focus`        — focus moved between cons
-  - `window::move`         — tree shape may have changed parent
+  - `workspace::focus` — workspace switch
+  - `window::focus` — focus moved between cons
+  - `window::move` — tree shape may have changed parent
   - `window::new` / `window::close` — same reason
 - Each event triggers a tree re-query + label update on the GTK main
   thread (`glib::MainContext::default().invoke_local`).
@@ -492,14 +492,14 @@ Cost: one `get_tree` IPC round-trip per relevant event. Negligible.
 
 ### Files
 
-| File                          | Action                                  |
-|-------------------------------|-----------------------------------------|
-| `src/layout_indicator.rs`     | create — `build_layout_indicator()` returns the GTK label + an update closure |
+| File                          | Action                                                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `src/layout_indicator.rs`     | create — `build_layout_indicator()` returns the GTK label + an update closure                                           |
 | `src/navigator.rs`            | edit — instantiate label, append into `sysinfo_box` after battery, hook update closure into the existing IPC dispatcher |
-| `src/main.rs`                 | edit — call update on i3 events (alongside the existing clock/battery tick) |
-| `src/lib.rs` / `src/fa.rs`    | edit — add the FA glyph constants if not already exported |
-| `assets/style.css`            | edit — `.layout-indicator { … }` matching `.sysinfo-label` |
-| `docs/plan/03-common-info.md` | edit — note layout indicator alongside battery/clock |
+| `src/main.rs`                 | edit — call update on i3 events (alongside the existing clock/battery tick)                                             |
+| `src/lib.rs` / `src/fa.rs`    | edit — add the FA glyph constants if not already exported                                                               |
+| `assets/style.css`            | edit — `.layout-indicator { … }` matching `.sysinfo-label`                                                              |
+| `docs/plan/03-common-info.md` | edit — note layout indicator alongside battery/clock                                                                    |
 
 ### Open questions
 
@@ -509,3 +509,92 @@ Cost: one `get_tree` IPC round-trip per relevant event. Negligible.
 - Multi-monitor: which workspace's layout do we show — the focused one,
   or one-per-output? Proposal: focused only, since the rest of sysinfo
   is single-valued.
+
+### stack-layout user interface
+
+i3's stacked and tabbed layouts each render a per-child title strip
+inside the workspace (stacked = vertical pile of titlebars, tabbed =
+horizontal row of tabs). The user wants those strips gone — the i3More
+bar already shows app icons per workspace, so it can take over window
+switching for grouped layouts too.
+
+Two coordinated changes:
+
+#### i3 patch — remove the deco strip in L_STACKED and L_TABBED
+
+`render_con_stacked` and `render_con_tabbed` in `vendor/i3/src/render.c`
+compute a deco rect per child from `params.deco_height`. The cleanest
+patch is to force `deco_height = 0` at the top of both routines, then
+skip the per-child deco-rect bookkeeping. Result:
+
+- Focused child gets the entire parent rect.
+- Non-focused siblings are not visible (no titlebar to click).
+- The bar becomes the sole mouse-driven switcher for these layouts.
+
+Files:
+
+| File                              | Change                                        |
+|-----------------------------------|-----------------------------------------------|
+| `vendor/i3/src/render.c`          | gate the deco-height computation behind a layout check, ~10 lines per function |
+
+#### i3More bar — per-class focus indicator + click-to-focus
+
+Decisions (already taken via AskUserQuestion):
+
+- Strip removed from **both stacked and tabbed**.
+- Bar keeps **one icon per class** per workspace; the icon whose class
+  contains the focused window gets a small underline bar.
+- **Click on an icon focuses the window of that class** — cycles through
+  windows of the same class on repeated clicks.
+
+Model changes (`src/model.rs`):
+
+- Add `focused_class: Option<String>` to `WorkspaceInfo` — class of the
+  currently-focused leaf in that workspace.
+- Add per-class `con_ids: Vec<i64>` map so the click handler knows which
+  windows to cycle through.
+- `extract_workspace_classes` walks the tree once already; extend it to
+  also record (a) the focused leaf's class per workspace, (b) the con
+  IDs grouped by class.
+
+Navigator changes (`src/navigator.rs`):
+
+- Wrap each `workspace-icon` GtkImage in a vertical Box.
+- Append a thin underline `gtk4::Box` below, with css class
+  `workspace-icon-focused-bar`. Visible only when
+  `focused_class == this_class`.
+- `GestureClick` on the icon → on release, look up con IDs for this
+  class on this workspace, find next-after-currently-focused, send
+  `[con_id=N] focus` over IPC. State for the cycle order lives in the
+  click closure (captured Vec of con_ids; index advanced on each
+  click).
+
+CSS (`assets/style.css`):
+
+```
+.workspace-icon-focused-bar {
+    background-color: #fabd2f;
+    min-height: 2px;
+    border-radius: 1px;
+    margin-top: 1px;
+}
+```
+
+Files:
+
+| File                          | Change                                                 |
+|-------------------------------|--------------------------------------------------------|
+| `src/model.rs`                | edit — add `focused_class`, group con IDs by class    |
+| `src/navigator.rs`            | edit — wrap icon in vbox + underline, add click handler |
+| `assets/style.css`            | edit — new class for the underline                    |
+| `vendor/i3/src/render.c`      | edit — zero deco-height for L_STACKED and L_TABBED    |
+
+Edge cases / open questions:
+
+- Same class, multiple windows: cycle order = tree-walk order, which is
+  stable as long as the tree shape doesn't change. Good enough for v1.
+- Tooltip showing the active window's title on hover — nice add-on but
+  not in scope here.
+- Existing tab/stack keyboard navigation (`$mod+l` / `$mod+h` focus
+  child/parent) keeps working; this change only removes the *visual*
+  strip and shifts mouse switching to the bar.
