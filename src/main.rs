@@ -3,9 +3,11 @@
 //! Provides a floating workspace navigator panel with app icons.
 //! Communicates with i3 via IPC. No external script dependencies.
 
+mod auto_unmax;
 mod control_panel;
 mod fa;
 mod ipc;
+mod layout_indicator;
 mod mic_indicator;
 mod model;
 mod navigator;
@@ -202,6 +204,12 @@ fn on_activate(app: &gtk4::Application) {
     let history_for_poll = notify_history.clone();
     let badge_for_poll = badge_label.clone();
     let panel_for_poll = notify_panel.clone();
+    let layout_for_poll = sysinfo_labels.layout.clone();
+
+    // Initial update so the indicator reflects current focus on startup.
+    if let Ok((_, tree, _)) = query_initial_state() {
+        sysinfo_labels.layout.update_from_tree(&tree);
+    }
 
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         // Drain all pending i3 events
@@ -227,19 +235,20 @@ fn on_activate(app: &gtk4::Application) {
             let state_inner = state_clone.clone();
             let container_inner = container_clone.clone();
             let debounce_clear = debounce_clone.clone();
+            let layout_inner = layout_for_poll.clone();
             let source_id = glib::timeout_add_local_once(
                 std::time::Duration::from_millis(100),
                 move || {
                     // Clear the stored SourceId before it becomes stale
                     debounce_clear.borrow_mut().take();
-                    refresh_state(&state_inner, &container_inner);
+                    refresh_state(&state_inner, &container_inner, &layout_inner);
                     // Renumber workspaces if a structural event occurred
                     // (auto-focus already ran in the event listener thread)
                     if has_structural {
                         match sequencer::renumber_workspaces() {
                             Ok(true) => {
                                 // Renames happened — refresh again to show new numbers
-                                refresh_state(&state_inner, &container_inner);
+                                refresh_state(&state_inner, &container_inner, &layout_inner);
                             }
                             Ok(false) => {} // already sequential
                             Err(e) => log::error!("Sequencer error: {}", e),
@@ -465,10 +474,20 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
 fn refresh_state(
     state: &Rc<RefCell<NavigatorState>>,
     container_ref: &Rc<RefCell<gtk4::Box>>,
+    layout_indicator: &Rc<layout_indicator::LayoutIndicator>,
 ) {
     // Query fresh state from i3 (in a way that doesn't block too long)
     let fresh = match query_initial_state() {
-        Ok((ws, tree, output_order)) => model::build_workspace_state(&ws, &tree, &output_order),
+        Ok((ws, tree, output_order)) => {
+            layout_indicator.update_from_tree(&tree);
+            if let Some(cmd) = auto_unmax::revert_command(&tree) {
+                log::info!("auto-unmax: {}", cmd);
+                if let Ok(mut conn) = ipc::I3Connection::connect() {
+                    let _ = conn.run_command(&cmd);
+                }
+            }
+            model::build_workspace_state(&ws, &tree, &output_order)
+        }
         Err(e) => {
             log::error!("Failed to refresh i3 state: {}", e);
             return;

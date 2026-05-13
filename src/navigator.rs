@@ -4,6 +4,7 @@
 //! and application icons. Clicking a workspace switches to it.
 
 use i3more::icon::{IconResolver, IconResult};
+use crate::layout_indicator::LayoutIndicator;
 use crate::model::WorkspaceInfo;
 use gtk4::gdk;
 use gtk4::glib;
@@ -24,6 +25,7 @@ pub struct NavigatorState {
 pub struct SysinfoLabels {
     pub clock: gtk4::Label,
     pub battery: gtk4::Label,
+    pub layout: Rc<LayoutIndicator>,
 }
 
 /// Handles for the notification bell icon in the bar.
@@ -102,6 +104,10 @@ pub fn build_navigator(
         sysinfo_box.append(&battery_label);
     }
 
+    // Layout indicator — hidden until first tree refresh fills it in
+    let layout_indicator = Rc::new(LayoutIndicator::new());
+    sysinfo_box.append(&layout_indicator.container);
+
     // Clock label
     let clock_label = gtk4::Label::new(Some(&crate::sysinfo::read_clock()));
     clock_label.add_css_class("sysinfo-label");
@@ -127,6 +133,7 @@ pub fn build_navigator(
     let sysinfo_labels = SysinfoLabels {
         clock: clock_label,
         battery: battery_label,
+        layout: layout_indicator,
     };
 
     // Control panel (sliders) icon
@@ -258,26 +265,129 @@ fn build_workspace_entry(
 
     // App icons in a horizontal row below the number
     if !ws.window_classes.is_empty() {
-        let icon_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        let icon_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         icon_row.set_halign(gtk4::Align::Center);
         let mut state_mut = state.borrow_mut();
         for class in &ws.window_classes {
             let icon_result = state_mut.icon_resolver.resolve(class);
-            let image = create_icon_widget(&icon_result);
-            icon_row.append(&image);
+            let icon_cell = build_icon_cell(
+                &icon_result,
+                class,
+                ws.focused_class.as_deref() == Some(class.as_str()),
+                ws.class_con_ids.get(class).cloned().unwrap_or_default(),
+            );
+            icon_row.append(&icon_cell);
         }
         entry_box.append(&icon_row);
     }
 
-    // Click handler to switch workspace
+    // Click handler to switch workspace — set propagation phase to Bubble so
+    // per-icon gestures (Claimed in their handlers) win first.
     let ws_num = ws.num;
     let gesture = gtk4::GestureClick::new();
+    gesture.set_propagation_phase(gtk4::PropagationPhase::Bubble);
     gesture.connect_released(move |_, _, _, _| {
         switch_workspace(ws_num);
     });
     entry_box.add_controller(gesture);
 
     entry_box
+}
+
+/// Build the per-class icon cell: icon image stacked over a thin focus
+/// underline bar, with a click gesture that focuses the next window of
+/// this class (cycles on repeated clicks).
+fn build_icon_cell(
+    icon_result: &IconResult,
+    _class: &str,
+    is_focused_class: bool,
+    con_ids: Vec<i64>,
+) -> gtk4::Box {
+    let cell = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    cell.add_css_class("workspace-icon-cell");
+
+    let image = create_icon_widget(icon_result);
+    cell.append(&image);
+
+    let underline = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    underline.add_css_class("workspace-icon-focused-bar");
+    underline.set_visible(is_focused_class);
+    cell.append(&underline);
+
+    if !con_ids.is_empty() {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let ids = con_ids.clone();
+        gesture.connect_released(move |g, _, _, _| {
+            // Claim so the entry-level handler doesn't also fire (= ws switch).
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            focus_next_of_class(ids.clone());
+        });
+        cell.add_controller(gesture);
+    }
+
+    cell
+}
+
+/// Focus the next window in `con_ids` after the currently-focused con.
+/// Spawned on a background thread so IPC doesn't block the GTK loop.
+fn focus_next_of_class(con_ids: Vec<i64>) {
+    std::thread::spawn(move || {
+        let mut conn = match crate::ipc::I3Connection::connect() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("focus-cycle: connect failed: {}", e);
+                return;
+            }
+        };
+        let tree = match conn.get_tree() {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("focus-cycle: get_tree failed: {}", e);
+                return;
+            }
+        };
+        let focused_id = find_focused_id(&tree);
+        let target = pick_next_id(&con_ids, focused_id);
+        if let Some(id) = target {
+            if let Err(e) = conn.run_command(&format!("[con_id={}] focus", id)) {
+                log::warn!("focus-cycle: focus command failed: {}", e);
+            }
+        }
+    });
+}
+
+fn pick_next_id(ids: &[i64], current: Option<i64>) -> Option<i64> {
+    if ids.is_empty() {
+        return None;
+    }
+    if let Some(cur) = current {
+        if let Some(pos) = ids.iter().position(|id| *id == cur) {
+            return Some(ids[(pos + 1) % ids.len()]);
+        }
+    }
+    Some(ids[0])
+}
+
+fn find_focused_id(node: &serde_json::Value) -> Option<i64> {
+    if node["focused"].as_bool() == Some(true) {
+        return node["id"].as_i64();
+    }
+    if let Some(nodes) = node["nodes"].as_array() {
+        for child in nodes {
+            if let Some(id) = find_focused_id(child) {
+                return Some(id);
+            }
+        }
+    }
+    if let Some(floating) = node["floating_nodes"].as_array() {
+        for child in floating {
+            if let Some(id) = find_focused_id(child) {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 /// Create a GTK Image widget for an icon result.
