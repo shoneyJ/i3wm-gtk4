@@ -11,7 +11,23 @@ pub struct WorkspaceInfo {
     pub urgent: bool,
     pub visible: bool,
     pub output: String,
+    /// Distinct window classes present on this workspace, in tree-walk
+    /// order. Drives one-icon-per-class rendering on the bar.
     pub window_classes: Vec<String>,
+    /// Class of the focused leaf on this workspace, if any. Drives the
+    /// per-class focus underline under the workspace icons.
+    pub focused_class: Option<String>,
+    /// Per-class con IDs in tree-walk order. Used by the click handler
+    /// to cycle focus through multiple windows of the same class.
+    pub class_con_ids: HashMap<String, Vec<i64>>,
+}
+
+/// Per-workspace data collected from a single tree walk.
+#[derive(Default)]
+struct WorkspaceTreeData {
+    classes: Vec<String>,                       // tree-walk order, deduped
+    class_con_ids: HashMap<String, Vec<i64>>,   // class → con ids in tree-walk order
+    focused_class: Option<String>,              // class of focused leaf, if any
 }
 
 /// Build a complete workspace state by combining `get_workspaces` and `get_tree` data.
@@ -21,8 +37,8 @@ pub fn build_workspace_state(
     tree_json: &Value,
     output_order: &[String],
 ) -> Vec<WorkspaceInfo> {
-    // Extract per-workspace window classes from the tree
-    let class_map = extract_workspace_classes(tree_json);
+    let mut tree_data: HashMap<i64, WorkspaceTreeData> = HashMap::new();
+    collect_workspaces(tree_json, &mut tree_data);
 
     // Build WorkspaceInfo list from the workspace metadata
     let ws_array = match workspaces_json.as_array() {
@@ -34,13 +50,20 @@ pub fn build_workspace_state(
         .iter()
         .filter_map(|ws| {
             let num = ws["num"].as_i64()?;
+            let mut data = tree_data.remove(&num).unwrap_or_default();
+            // Keep classes in tree-walk order but de-duplicated (preserving
+            // first-seen order so the bar's icon order stays stable).
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            data.classes.retain(|c| seen.insert(c.clone()));
             Some(WorkspaceInfo {
                 num,
                 focused: ws["focused"].as_bool().unwrap_or(false),
                 urgent: ws["urgent"].as_bool().unwrap_or(false),
                 visible: ws["visible"].as_bool().unwrap_or(false),
                 output: ws["output"].as_str().unwrap_or("").to_string(),
-                window_classes: class_map.get(&num).cloned().unwrap_or_default(),
+                window_classes: data.classes,
+                focused_class: data.focused_class,
+                class_con_ids: data.class_con_ids,
             })
         })
         .collect();
@@ -55,30 +78,20 @@ pub fn build_workspace_state(
     result
 }
 
-/// Recursively traverse the i3 tree to extract unique window classes per workspace.
-fn extract_workspace_classes(tree: &Value) -> HashMap<i64, Vec<String>> {
-    let mut map: HashMap<i64, Vec<String>> = HashMap::new();
-    collect_workspaces(tree, &mut map);
-    map
-}
-
-fn collect_workspaces(node: &Value, map: &mut HashMap<i64, Vec<String>>) {
+fn collect_workspaces(node: &Value, map: &mut HashMap<i64, WorkspaceTreeData>) {
     let node_type = node["type"].as_str().unwrap_or("");
 
     if node_type == "workspace" {
         if let Some(num) = node["num"].as_i64() {
             if num > 0 {
-                let mut classes = Vec::new();
-                collect_window_classes(node, &mut classes);
-                classes.sort();
-                classes.dedup();
-                map.insert(num, classes);
+                let mut data = WorkspaceTreeData::default();
+                collect_leaves(node, &mut data);
+                map.insert(num, data);
                 return; // Don't recurse further for workspaces
             }
         }
     }
 
-    // Recurse into child nodes
     if let Some(nodes) = node["nodes"].as_array() {
         for child in nodes {
             collect_workspaces(child, map);
@@ -91,22 +104,30 @@ fn collect_workspaces(node: &Value, map: &mut HashMap<i64, Vec<String>>) {
     }
 }
 
-/// Recursively collect all window_properties.class values from a subtree.
-fn collect_window_classes(node: &Value, classes: &mut Vec<String>) {
+fn collect_leaves(node: &Value, data: &mut WorkspaceTreeData) {
     if let Some(class) = node["window_properties"]["class"].as_str() {
         if !class.is_empty() {
-            classes.push(class.to_string());
+            data.classes.push(class.to_string());
+            if let Some(id) = node["id"].as_i64() {
+                data.class_con_ids
+                    .entry(class.to_string())
+                    .or_default()
+                    .push(id);
+            }
+            if node["focused"].as_bool() == Some(true) {
+                data.focused_class = Some(class.to_string());
+            }
         }
     }
 
     if let Some(nodes) = node["nodes"].as_array() {
         for child in nodes {
-            collect_window_classes(child, classes);
+            collect_leaves(child, data);
         }
     }
     if let Some(floating) = node["floating_nodes"].as_array() {
         for child in floating {
-            collect_window_classes(child, classes);
+            collect_leaves(child, data);
         }
     }
 }

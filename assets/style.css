@@ -11,7 +11,7 @@ window {
 }
 
 .workspace-entry {
-    padding: 2px 4px;
+    padding: 2px 10px;
     margin: 0;
     border-radius: 0;
     min-width: 0;
@@ -51,6 +51,17 @@ window {
     color: #ffffff;
 }
 
+.workspace-icon-cell {
+    padding: 0 3px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.workspace-icon-cell:hover .workspace-icon {
+    opacity: 1;
+}
+
 .workspace-icon {
     opacity: 0.85;
     padding: 0;
@@ -59,10 +70,17 @@ window {
     min-width: 0;
 }
 
+.workspace-icon-focused-bar {
+    background-color: #fabd2f;
+    min-height: 2px;
+    border-radius: 1px;
+    margin: 1px 2px 0 2px;
+}
+
 .workspace-separator {
     background-color: #665c54;
     min-width: 1px;
-    margin: 6px 4px;
+    margin: 6px 8px;
     opacity: 0.6;
 }
 
@@ -104,6 +122,40 @@ window {
     margin: 0;
     min-height: 0;
     min-width: 0;
+}
+
+.layout-indicator-area {
+    padding: 0 2px;
+    margin: 0;
+    min-height: 0;
+}
+
+.layout-indicator {
+    opacity: 0.85;
+    padding: 0 4px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.layout-indicator:hover {
+    opacity: 1;
+}
+
+.layout-popover-button {
+    background: none;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 4px 8px;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+.layout-popover-button:hover {
+    background: none;
+    background-color: #3c3836;
 }
 
 .sysinfo-icon:hover {
