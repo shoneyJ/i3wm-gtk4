@@ -34,6 +34,8 @@ enum I3Event {
     WorkspacesChanged,
     WorkspaceStructural,
     WorkspaceEmpty { output: String, num: i64 },
+    WindowFocused(i3more::mru::MruEntry),
+    WindowClosed(i64),
 }
 
 /// Safely remove a GLib source without panicking if it was already removed.
@@ -127,6 +129,10 @@ fn on_activate(app: &gtk4::Application) {
     // Build the navigator UI
     let (window, container_ref, tray_box_ref, screen_width, sysinfo_labels, notify_handles, cp_handles) =
         navigator::build_navigator(app, state.clone());
+
+    // Window MRU tracker — updated from window focus/close events below.
+    let mru_tracker: Rc<RefCell<i3more::mru::MruTracker>> =
+        Rc::new(RefCell::new(i3more::mru::MruTracker::new()));
 
     // Set up i3 event listener in background thread
     let (tx, rx) = mpsc::channel::<I3Event>();
@@ -224,6 +230,7 @@ fn on_activate(app: &gtk4::Application) {
     let badge_for_poll = badge_label.clone();
     let panel_for_poll = notify_panel.clone();
     let layout_for_poll = sysinfo_labels.layout.clone();
+    let mru_for_poll = mru_tracker.clone();
 
     // Initial update so the indicator reflects current focus on startup.
     if let Ok((_, tree, _)) = query_initial_state() {
@@ -235,11 +242,20 @@ fn on_activate(app: &gtk4::Application) {
         let mut has_event = false;
         let mut has_structural = false;
         while let Ok(evt) = rx.try_recv() {
-            has_event = true;
             match evt {
-                I3Event::WorkspaceStructural
-                | I3Event::WorkspaceEmpty { .. } => { has_structural = true; }
-                _ => {}
+                I3Event::WorkspaceStructural | I3Event::WorkspaceEmpty { .. } => {
+                    has_event = true;
+                    has_structural = true;
+                }
+                I3Event::WindowFocused(entry) => {
+                    mru_for_poll.borrow_mut().focus(entry);
+                }
+                I3Event::WindowClosed(id) => {
+                    mru_for_poll.borrow_mut().close(id);
+                }
+                I3Event::WorkspacesChanged => {
+                    has_event = true;
+                }
             }
         }
 
@@ -453,9 +469,9 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
     loop {
         let (event_type, payload) = conn.read_event()?;
 
-        let event = if event_type == ipc::EVENT_WORKSPACE {
+        if event_type == ipc::EVENT_WORKSPACE {
             let change = payload["change"].as_str().unwrap_or("");
-            match change {
+            let event = match change {
                 "empty" => {
                     let output = payload["current"]["output"].as_str().unwrap_or("").to_string();
                     let num = payload["current"]["num"].as_i64().unwrap_or(0);
@@ -475,14 +491,38 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
                     continue;
                 }
                 _ => I3Event::WorkspacesChanged,
+            };
+            if tx.send(event).is_err() {
+                log::warn!("Event channel closed, GTK app shutting down");
+                break;
             }
-        } else {
-            I3Event::WorkspacesChanged
-        };
-
-        if tx.send(event).is_err() {
-            log::warn!("Event channel closed, GTK app shutting down");
-            break;
+        } else if event_type == ipc::EVENT_WINDOW {
+            let change = payload["change"].as_str().unwrap_or("");
+            match change {
+                "focus" => {
+                    if let Some(entry) = i3more::mru::entry_from_container(&payload["container"]) {
+                        if tx.send(I3Event::WindowFocused(entry)).is_err() {
+                            log::warn!("Event channel closed, GTK app shutting down");
+                            break;
+                        }
+                    }
+                }
+                "close" => {
+                    if let Some(id) = payload["container"]["id"].as_i64() {
+                        if tx.send(I3Event::WindowClosed(id)).is_err() {
+                            log::warn!("Event channel closed, GTK app shutting down");
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // Window events also affect what the navigator renders
+            // (focus highlight, urgent state), so trigger a refresh.
+            if tx.send(I3Event::WorkspacesChanged).is_err() {
+                log::warn!("Event channel closed, GTK app shutting down");
+                break;
+            }
         }
     }
 

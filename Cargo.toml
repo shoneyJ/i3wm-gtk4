@@ -50,6 +50,10 @@ name = "i3more-window"
 path = "src/window_main.rs"
 
 [[bin]]
+name = "i3more-back"
+path = "src/back_main.rs"
+
+[[bin]]
 name = "i3more-speech-text"
 path = "src/speech_text_main.rs"
 required-features = ["speech-text"]

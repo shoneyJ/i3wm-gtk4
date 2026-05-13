@@ -163,3 +163,35 @@ bar-logs:
 # Drop the cargo target volume entry for the bar — forces full rebuild
 bar-clean:
     docker compose run --rm dev cargo clean -p i3more
+
+# ============================================================================
+# i3more-back (src/back_main.rs → /opt/i3more/bin/i3more-back) — focuses the
+# previously focused window by reading the MRU list maintained by the bar.
+#
+# Invoked from i3 config:
+#   bindsym Mod1+Tab exec --no-startup-id /opt/i3more/bin/i3more-back
+# Short-lived CLI; no restart step needed.
+#
+# Same deploy pattern as i3-install: build in container → bind-mounted stage
+# → host-side sudo cp to /opt. `--remove-destination` unlinks any in-use file
+# first (avoids ETXTBSY if a stale process holds it).
+# ============================================================================
+
+back_bin       := "i3more-back"
+back_stage     := "dist/" + back_bin
+back_dest_dir  := "/opt/i3more/bin"
+
+# cargo build --release --bin i3more-back inside the dev container
+back-build:
+    docker compose run --rm dev cargo build --release --bin i3more-back
+
+# Build + stage to bind-mounted dist/ + sudo cp to /opt/i3more/bin/
+back-install: back-build
+    docker compose run --rm dev cp --remove-destination \
+        target/release/{{back_bin}} /app/{{back_stage}}
+    sudo mkdir -p {{back_dest_dir}}
+    sudo cp --remove-destination {{back_stage}} {{back_dest_dir}}/{{back_bin}}
+    @ls -la {{back_dest_dir}}/{{back_bin}}
+
+# Same as back-install — kept for parity with bar-deploy
+back-deploy: back-install

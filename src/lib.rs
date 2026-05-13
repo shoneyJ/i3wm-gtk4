@@ -5,6 +5,7 @@ pub mod fa;
 pub mod icon;
 pub mod ipc;
 pub mod launcher;
+pub mod mru;
 #[cfg(feature = "speech-text")]
 pub mod speech_text;
 pub mod translate;
