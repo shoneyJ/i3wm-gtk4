@@ -114,40 +114,50 @@ i3-clean:
     docker compose run --rm i3-build rm -rf {{i3_build}}
 
 # ============================================================================
-# i3More bar (src/main.rs → dist/i3more) — the GTK4 navigator + sysinfo bar.
+# i3More binaries — every Rust binary in this repo lives at /opt/i3more/bin/
+# once installed. The i3 config references that absolute path so the user's
+# session doesn't depend on $PATH or the location of the source checkout.
 #
-# Launched from i3 config:
-#   exec_always --no-startup-id killall i3more 2>/dev/null; \
-#     exec ~/projects/github/shoneyj/i3More/dist/i3more
-# so `i3-msg reload` re-execs whatever sits at dist/i3more.
+# Build → host flow: cargo builds inside the `dev` container (its target/
+# is a named docker volume, NOT bind-mounted). Each `*-install` recipe
+# stages the freshly built binary into ./dist/ via the container bind mount,
+# then `sudo cp` from dist/ to /opt/i3more/bin/ on the host. /opt is
+# root-owned, so the sudo step is unavoidable.
 # ============================================================================
 
-bar_bin     := "dist/i3more"
+bin_dir     := "/opt/i3more/bin"
+bar_bin     := bin_dir + "/i3more"
+layout_bin  := bin_dir + "/i3more-layout"
 bar_log     := "$HOME/.cache/i3more/i3more.log"
 
-# --- compile the bar --------------------------------------------------------
+# Every i3More binary that builds with default features. Excludes
+# i3more-speech-text (required-features = ["speech-text"], links whisper-rs,
+# needs the whisper-cuda container — built separately).
+all_bins    := "i3more i3more-translate i3more-audio i3more-launcher \
+                i3more-workspace i3more-lock i3more-popup-translate \
+                i3more-power i3more-power-profile i3more-keyhint \
+                i3more-window i3more-layout i3more-speech-text-ui"
+
+# --- bar (src/main.rs → /opt/i3more/bin/i3more) -----------------------------
 
 # cargo build --release --bin i3more inside the dev container
 bar-build:
     docker compose run --rm dev cargo build --release --bin i3more
 
-# --- install / restart on the host ------------------------------------------
-
-# Build + kill running bar + cp release binary into dist/
+# Build + kill running bar + sudo cp to /opt/i3more/bin/
 bar-install: bar-build
     @killall i3more 2>/dev/null || true
     docker compose run --rm dev cp --remove-destination \
-        target/release/i3more /app/{{bar_bin}}
+        target/release/i3more /app/dist/i3more
+    sudo install -D -m 0755 dist/i3more {{bar_bin}}
     @ls -la {{bar_bin}}
 
 # i3-msg reload — exec_always in the i3 config relaunches the bar
 bar-restart:
     i3-msg reload
 
-# Full pipeline: build → cp → reload i3 so the bar re-exec's
+# Full pipeline: build → install → reload i3 so the bar re-exec's
 bar-deploy: bar-install bar-restart
-
-# --- runtime ----------------------------------------------------------------
 
 # Show whether the bar is running + binary mtime
 bar-status:
@@ -158,8 +168,47 @@ bar-status:
 bar-logs:
     tail -f {{bar_log}}
 
-# --- cleanup ----------------------------------------------------------------
-
 # Drop the cargo target volume entry for the bar — forces full rebuild
 bar-clean:
     docker compose run --rm dev cargo clean -p i3more
+
+# --- i3more-layout CLI (keyboard cascade) -----------------------------------
+
+# Build the layout CLI inside the dev container
+layout-cli-build:
+    docker compose run --rm dev cargo build --release --bin i3more-layout
+
+# Build + sudo cp release binary into /opt/i3more/bin/
+layout-cli-install: layout-cli-build
+    docker compose run --rm dev cp --remove-destination \
+        target/release/i3more-layout /app/dist/i3more-layout
+    sudo install -D -m 0755 dist/i3more-layout {{layout_bin}}
+    @ls -la {{layout_bin}}
+
+layout-cli-deploy: layout-cli-install
+
+# --- every i3More binary at once --------------------------------------------
+
+# cargo build --release for every i3More binary the dev container can
+# produce. `--features lock` opts the i3more-lock pam-sys path in;
+# i3more-speech-text is the only binary excluded (needs the whisper-build
+# image — see the `whisper-*` recipes elsewhere if/when they're added).
+all-build:
+    docker compose run --rm dev cargo build --release --features lock \
+        $(printf -- '--bin %s ' {{all_bins}})
+
+# Build every binary, stage into dist/, then sudo cp each to /opt/i3more/bin/.
+# `i3-msg reload` is the user's responsibility after this (see all-deploy).
+all-install: all-build
+    @killall i3more 2>/dev/null || true
+    @sudo mkdir -p {{bin_dir}}
+    @for bin in {{all_bins}}; do \
+        echo "==> $bin"; \
+        docker compose run --rm dev cp --remove-destination \
+            target/release/$bin /app/dist/$bin; \
+        sudo install -D -m 0755 dist/$bin {{bin_dir}}/$bin; \
+    done
+    @ls -la {{bin_dir}}/
+
+# Build + install everything + reload i3
+all-deploy: all-install bar-restart

@@ -428,8 +428,13 @@ fn start_event_listener(tx: mpsc::Sender<I3Event>) {
 /// from regular changes (focus). Skips "rename" events to prevent loops.
 fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = ipc::I3Connection::connect_for_events()?;
-    conn.subscribe(&["workspace", "window"])?;
-    log::info!("Subscribed to i3 workspace and window events");
+    // `binding` is here so the indicator refreshes after keyboard layout
+    // shortcuts like `$mod+e` / `$mod+s` / `$mod+g` — i3 emits no
+    // dedicated layout-change event, but it does emit a binding event
+    // whenever a bound key fires, which is close enough to trigger a
+    // full state refresh.
+    conn.subscribe(&["workspace", "window", "binding"])?;
+    log::info!("Subscribed to i3 workspace, window, and binding events");
 
     loop {
         let (event_type, payload) = conn.read_event()?;

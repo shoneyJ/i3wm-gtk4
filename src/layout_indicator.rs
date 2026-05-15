@@ -1,13 +1,18 @@
 //! Layout indicator for the i3More bar.
 //!
-//! Shows the layout of the currently focused workspace (the workspace
-//! container's own `layout` field — splith / splitv / tabbed). Lives in
-//! the sysinfo area between battery and clock.
+//! Shows the layout of the immediate parent of the currently-focused
+//! leaf — i.e. the layout that determines where the next-opened window
+//! will land. We deliberately do NOT show workspace.layout: i3 does not
+//! update a workspace's own `layout` field on a `layout` command (it
+//! wraps the workspace's children in a new split container instead), so
+//! workspace.layout often disagrees with what the user actually sees.
+//! The cascade command (see layout_cmd.rs) makes the focused parent's
+//! layout consistent across the whole workspace, so this single
+//! reading is enough.
 //!
-//! Clicking the indicator opens a popover with three buttons; clicking
-//! one sends `[con_id=<workspace>] layout <name>` over IPC, so the
-//! workspace's top-level layout — and therefore the visual arrangement
-//! of all top-level windows on it — changes immediately.
+//! Clicking the indicator opens a popover with three buttons; each
+//! sends the cascade command — splith / splitv / tabbed are applied to
+//! every container in the workspace.
 //!
 //! Stacked is intentionally absent from the popover: now that we hide
 //! the in-tree title strip for L_STACKED and L_TABBED (see render.c
@@ -19,6 +24,7 @@ use gtk4::prelude::*;
 use serde_json::Value;
 
 use crate::fa;
+use i3more::layout_cmd::{build_cascade_command, focused_parent_layout};
 
 pub struct LayoutIndicator {
     pub container: gtk4::Box,
@@ -55,8 +61,8 @@ impl LayoutIndicator {
 }
 
 fn apply_tree_to_label(label: &gtk4::Label, container: &gtk4::Box, tree: &Value) {
-    match focused_workspace(tree) {
-        Some((_id, layout)) => {
+    match focused_parent_layout(tree) {
+        Some(layout) => {
             let (glyph, tooltip) = layout_glyph_tooltip(&layout);
             label.set_markup(&fa::fa_icon(glyph, "#a89984", 11));
             label.set_tooltip_text(Some(tooltip));
@@ -147,115 +153,3 @@ fn layout_glyph_tooltip(layout: &str) -> (char, &'static str) {
     }
 }
 
-/// Return (con_id, layout) of the workspace that is currently focused.
-/// Prefers the workspace ancestor of the focused leaf (covers the common
-/// case where a window has focus). Falls back to walking each node's
-/// `focus` array from root so empty workspaces also resolve correctly.
-fn focused_workspace(tree: &Value) -> Option<(i64, String)> {
-    let mut stack: Vec<&Value> = Vec::new();
-    if find_focused_leaf(tree, &mut stack).is_some() {
-        for ancestor in stack.iter().rev() {
-            if ancestor["type"].as_str() == Some("workspace") {
-                let id = ancestor["id"].as_i64()?;
-                let layout = ancestor["layout"].as_str()?.to_string();
-                return Some((id, layout));
-            }
-        }
-    }
-    focused_workspace_via_chain(tree)
-}
-
-fn find_focused_leaf<'a>(node: &'a Value, stack: &mut Vec<&'a Value>) -> Option<&'a Value> {
-    if node["focused"].as_bool() == Some(true) {
-        return Some(node);
-    }
-    stack.push(node);
-    if let Some(nodes) = node["nodes"].as_array() {
-        for child in nodes {
-            if let Some(leaf) = find_focused_leaf(child, stack) {
-                return Some(leaf);
-            }
-        }
-    }
-    if let Some(floating) = node["floating_nodes"].as_array() {
-        for child in floating {
-            if let Some(leaf) = find_focused_leaf(child, stack) {
-                return Some(leaf);
-            }
-        }
-    }
-    stack.pop();
-    None
-}
-
-/// Build a `;`-separated i3 command that sets the given layout on the
-/// focused workspace AND every non-leaf container inside it. Falls back
-/// to a plain `layout <name>` if the workspace can't be resolved.
-fn build_cascade_command(tree: Option<&Value>, layout: &str) -> String {
-    let Some(tree) = tree else {
-        return format!("layout {}", layout);
-    };
-    let Some((ws_id, _)) = focused_workspace(tree) else {
-        return format!("layout {}", layout);
-    };
-    let Some(ws_node) = find_node_by_id(tree, ws_id) else {
-        return format!("layout {}", layout);
-    };
-    let mut ids: Vec<i64> = Vec::new();
-    collect_container_ids(ws_node, &mut ids);
-    if ids.is_empty() {
-        return format!("[con_id={}] layout {}", ws_id, layout);
-    }
-    ids.iter()
-        .map(|id| format!("[con_id={}] layout {}", id, layout))
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-fn find_node_by_id(node: &Value, id: i64) -> Option<&Value> {
-    if node["id"].as_i64() == Some(id) {
-        return Some(node);
-    }
-    for key in ["nodes", "floating_nodes"] {
-        if let Some(arr) = node[key].as_array() {
-            for child in arr {
-                if let Some(found) = find_node_by_id(child, id) {
-                    return Some(found);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Collect IDs of every node that owns child windows — the workspace
-/// itself plus every internal con. Skips leaves (terminal windows) since
-/// `layout` is a no-op on them. Skips floating_nodes since changing
-/// floating cons' layout doesn't fit the workspace-rearrange intent.
-fn collect_container_ids(node: &Value, ids: &mut Vec<i64>) {
-    let nodes = node["nodes"].as_array();
-    let has_children = nodes.map(|a| !a.is_empty()).unwrap_or(false);
-    if has_children {
-        if let Some(id) = node["id"].as_i64() {
-            ids.push(id);
-        }
-        for child in nodes.unwrap() {
-            collect_container_ids(child, ids);
-        }
-    }
-}
-
-fn focused_workspace_via_chain(node: &Value) -> Option<(i64, String)> {
-    if node["type"].as_str() == Some("workspace") {
-        let id = node["id"].as_i64()?;
-        let layout = node["layout"].as_str()?.to_string();
-        return Some((id, layout));
-    }
-    let focus = node["focus"].as_array()?;
-    let first_focus_id = focus.first()?.as_i64()?;
-    let nodes = node["nodes"].as_array()?;
-    nodes
-        .iter()
-        .find(|c| c["id"].as_i64() == Some(first_focus_id))
-        .and_then(focused_workspace_via_chain)
-}
