@@ -2,6 +2,12 @@
 //!
 //! Bundles Font Awesome 6 Free Solid (OTF) and registers it with fontconfig
 //! at startup so Pango can render the glyphs in GTK labels.
+//!
+//! Constants below are a glyph reference shared across i3More binaries —
+//! any given binary uses only a subset, so `dead_code` is silenced at
+//! module level rather than annotated per-symbol.
+
+#![allow(dead_code)]
 
 /// Font family name (must match the .otf metadata).
 pub const FA_FONT: &str = "Font Awesome 6 Free Solid";

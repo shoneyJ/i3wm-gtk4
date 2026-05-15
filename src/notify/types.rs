@@ -21,5 +21,4 @@ pub struct Notification {
 pub enum NotifyEvent {
     New(Notification),
     Close(u32),
-    ActionInvoked(u32, String), // (notification_id, action_key)
 }

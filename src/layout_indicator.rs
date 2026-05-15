@@ -56,12 +56,19 @@ impl LayoutIndicator {
     }
 
     pub fn update_from_tree(&self, tree: &Value) {
-        apply_tree_to_label(&self.label, &self.container, tree);
+        apply_layout(&self.label, &self.container, focused_parent_layout(tree));
+    }
+
+    /// Fast path used by `refresh_state` — the caller already walked
+    /// the tree and extracted the focused parent's layout, so we skip
+    /// the redundant walk.
+    pub fn apply_layout(&self, layout: Option<String>) {
+        apply_layout(&self.label, &self.container, layout);
     }
 }
 
-fn apply_tree_to_label(label: &gtk4::Label, container: &gtk4::Box, tree: &Value) {
-    match focused_parent_layout(tree) {
+fn apply_layout(label: &gtk4::Label, container: &gtk4::Box, layout: Option<String>) {
+    match layout {
         Some(layout) => {
             let (glyph, tooltip) = layout_glyph_tooltip(&layout);
             label.set_markup(&fa::fa_icon(glyph, "#a89984", 11));
@@ -130,7 +137,7 @@ fn build_switcher_popover(
                 // i3 emits no window event for a bare layout change, so
                 // pull a fresh tree and update the indicator inline.
                 if let Ok(tree) = conn.get_tree() {
-                    apply_tree_to_label(&lbl_refresh, &con_refresh, &tree);
+                    apply_layout(&lbl_refresh, &con_refresh, focused_parent_layout(&tree));
                 }
             }
             popover_dismiss.popdown();

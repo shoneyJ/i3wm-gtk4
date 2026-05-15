@@ -7,7 +7,6 @@ use i3more::icon::{IconResolver, IconResult};
 use crate::layout_indicator::LayoutIndicator;
 use crate::model::WorkspaceInfo;
 use gtk4::gdk;
-use gtk4::glib;
 use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -30,7 +29,6 @@ pub struct SysinfoLabels {
 
 /// Handles for the notification bell icon in the bar.
 pub struct NotifyHandles {
-    pub bell_label: gtk4::Label,
     pub badge_label: gtk4::Label,
     pub bell_overlay: gtk4::Overlay,
 }
@@ -194,7 +192,6 @@ pub fn build_navigator(
     window.set_default_size(screen_width, BAR_HEIGHT);
 
     let notify_handles = NotifyHandles {
-        bell_label,
         badge_label,
         bell_overlay,
     };

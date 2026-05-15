@@ -1,6 +1,12 @@
 //! Raw i3 IPC protocol implementation over Unix socket.
 //!
 //! Protocol: "i3-ipc" magic (6 bytes) + payload_len (u32 LE) + msg_type (u32 LE) + payload
+//!
+//! Message-type and event-type constants are part of this module's API
+//! surface; not every binary uses every constant, so `dead_code` is
+//! silenced at module level.
+
+#![allow(dead_code)]
 
 use serde_json::Value;
 use std::io::{Read, Write};

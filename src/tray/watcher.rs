@@ -43,7 +43,7 @@ impl StatusNotifierWatcher {
             object_path: object_path.clone(),
         };
 
-        log::info!("SNI register: {} @ {}", bus_name, object_path);
+        log::debug!("SNI register: {} @ {}", bus_name, object_path);
 
         self.items.lock().unwrap().insert(id.clone());
         let _ = self.tx.send(TrayEvent::ItemRegistered(id));
@@ -170,7 +170,7 @@ async fn monitor_name_changes(
 
                     for id in removed {
                         items_stream.lock().unwrap().remove(&id);
-                        log::info!("SNI name vanished: {}", name);
+                        log::debug!("SNI name vanished: {}", name);
                         let _ = tx_stream.send(TrayEvent::ItemUnregistered(id));
                     }
                 }

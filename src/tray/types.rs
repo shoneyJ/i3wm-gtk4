@@ -45,5 +45,4 @@ pub enum TrayEvent {
     ItemRegistered(TrayItemId),
     ItemUnregistered(TrayItemId),
     ItemPropsLoaded(TrayItemProps),
-    ItemUpdated(TrayItemId),
 }

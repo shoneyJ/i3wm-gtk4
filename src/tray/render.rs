@@ -112,7 +112,7 @@ fn best_pixmap_texture(pixmaps: &[TrayPixmap], target: i32) -> Option<gdk::Memor
 /// Attach left/right/middle click handlers to invoke D-Bus methods on the tray item.
 /// If the item has a Menu path, left and right clicks open the DBusMenu popup instead
 /// of calling Activate/ContextMenu (many apps like nm-applet don't expose Activate at all).
-fn attach_click_handlers(widget: &gtk4::Box, id: &TrayItemId, item_is_menu: bool, menu_path: Option<&str>) {
+fn attach_click_handlers(widget: &gtk4::Box, id: &TrayItemId, _item_is_menu: bool, menu_path: Option<&str>) {
     let use_dbusmenu = menu_path.is_some();
 
     if use_dbusmenu {

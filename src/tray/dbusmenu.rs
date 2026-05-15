@@ -18,8 +18,6 @@ pub struct MenuItem {
     pub enabled: bool,
     pub visible: bool,
     pub icon_name: Option<String>,
-    pub toggle_type: Option<String>,
-    pub toggle_state: i32,
     pub item_type: Option<String>,
     pub children: Vec<MenuItem>,
 }
@@ -34,8 +32,6 @@ impl MenuItem {
         let enabled = prop_bool(props, "enabled").unwrap_or(true);
         let visible = prop_bool(props, "visible").unwrap_or(true);
         let icon_name = prop_string(props, "icon-name");
-        let toggle_type = prop_string(props, "toggle-type");
-        let toggle_state = prop_i32(props, "toggle-state").unwrap_or(-1);
         let item_type = prop_string(props, "type");
 
         let children = parse_children(children_raw);
@@ -46,8 +42,6 @@ impl MenuItem {
             enabled,
             visible,
             icon_name,
-            toggle_type,
-            toggle_state,
             item_type,
             children,
         }
@@ -62,10 +56,6 @@ fn prop_string(props: &HashMap<String, OwnedValue>, key: &str) -> Option<String>
 
 fn prop_bool(props: &HashMap<String, OwnedValue>, key: &str) -> Option<bool> {
     props.get(key).and_then(|v| v.downcast_ref::<bool>().ok())
-}
-
-fn prop_i32(props: &HashMap<String, OwnedValue>, key: &str) -> Option<i32> {
-    props.get(key).and_then(|v| v.downcast_ref::<i32>().ok())
 }
 
 /// Parse an array of children from the GetLayout response.

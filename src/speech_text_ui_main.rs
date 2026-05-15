@@ -494,6 +494,8 @@ fn stt_root() -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 struct Segment {
+    /// Reserved — parsed for future use (jump-to-time on click).
+    #[allow(dead_code)]
     timestamp: String,
     de: String,
     en: Option<String>,

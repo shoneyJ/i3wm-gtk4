@@ -59,7 +59,7 @@ pub fn focus_next_on_output(empty_output: &str, empty_num: i64) -> Result<bool, 
         .or_else(|| same_output.iter().rev().find(|&&n| n < empty_num));
 
     if let Some(&target_num) = target {
-        log::info!("Auto-focus: ws {} (empty ws {} on {})", target_num, empty_num, empty_output);
+        log::debug!("Auto-focus: ws {} (empty ws {} on {})", target_num, empty_num, empty_output);
         conn.run_command(&format!("workspace number {}", target_num))?;
         Ok(true)
     } else {

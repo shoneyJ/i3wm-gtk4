@@ -72,7 +72,10 @@ dirs = "6"
 zbus = "5"
 async-io = "2"
 futures-util = "0.3"
-log = "0.4"
+# release_max_level_info strips debug!/trace! at compile time so their
+# format!() args never run in release builds. Bump to "warn" or "error"
+# for an even quieter binary; "info" keeps lifecycle messages on.
+log = { version = "0.4", features = ["release_max_level_info"] }
 env_logger = "0.11"
 x11rb = { version = "0.13", features = ["randr"] }
 zeroize = { version = "1", features = ["derive"] }
@@ -96,3 +99,13 @@ pipewire = { version = "0.9", features = ["v0_3_77"], optional = true }
 default = []
 lock = ["dep:pam-client"]
 speech-text = ["dep:whisper-rs", "dep:pipewire"]
+
+# Release profile tuned for the i3More daemons: long-running GTK4 apps
+# where startup cost is paid once, runtime cost matters daily, and
+# unwind tables are dead weight (we never catch panics). See
+# docs/plan/production-build.md item #1.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

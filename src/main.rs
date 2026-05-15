@@ -3,7 +3,6 @@
 //! Provides a floating workspace navigator panel with app icons.
 //! Communicates with i3 via IPC. No external script dependencies.
 
-mod auto_unmax;
 mod control_panel;
 mod fa;
 mod ipc;
@@ -30,10 +29,13 @@ use notify::types::NotifyEvent;
 use tray::types::{TrayEvent, TrayItemId, TrayItemProps};
 
 /// Message sent from the i3 event listener thread to the GTK main thread.
+/// `WorkspaceEmpty` is distinguished from `WorkspaceStructural` so the
+/// listener can run auto-focus eagerly (without the debounce delay) and
+/// the main loop still triggers a structural refresh.
 enum I3Event {
     WorkspacesChanged,
     WorkspaceStructural,
-    WorkspaceEmpty { output: String, num: i64 },
+    WorkspaceEmpty,
 }
 
 /// Safely remove a GLib source without panicking if it was already removed.
@@ -103,7 +105,7 @@ fn on_activate(app: &gtk4::Application) {
         }
     };
 
-    let workspaces = model::build_workspace_state(&workspaces_json, &tree_json, &output_order);
+    let workspaces = model::build_tree_snapshot(&workspaces_json, &tree_json, &output_order).workspaces;
 
     // Collect all unique window classes for batch icon resolution
     let all_classes: Vec<String> = workspaces
@@ -219,7 +221,7 @@ fn on_activate(app: &gtk4::Application) {
             has_event = true;
             match evt {
                 I3Event::WorkspaceStructural
-                | I3Event::WorkspaceEmpty { .. } => { has_structural = true; }
+                | I3Event::WorkspaceEmpty => { has_structural = true; }
                 _ => {}
             }
         }
@@ -264,25 +266,20 @@ fn on_activate(app: &gtk4::Application) {
         while let Ok(event) = tray_rx.try_recv() {
             match event {
                 TrayEvent::ItemRegistered(id) => {
-                    log::info!("Tray item registered: {}:{}", id.bus_name, id.object_path);
+                    log::debug!("Tray item registered: {}:{}", id.bus_name, id.object_path);
                     tray_state_clone.borrow_mut().entry(id.clone()).or_insert_with(|| {
                         TrayItemProps::new(id)
                     });
                     tray_changed = true;
                 }
                 TrayEvent::ItemUnregistered(id) => {
-                    log::info!("Tray item unregistered: {}:{}", id.bus_name, id.object_path);
+                    log::debug!("Tray item unregistered: {}:{}", id.bus_name, id.object_path);
                     tray_state_clone.borrow_mut().remove(&id);
                     tray_changed = true;
                 }
                 TrayEvent::ItemPropsLoaded(props) => {
-                    log::info!("Tray item props loaded: {} icon={}", props.id.bus_name, props.icon_name);
+                    log::debug!("Tray item props loaded: {} icon={}", props.id.bus_name, props.icon_name);
                     tray_state_clone.borrow_mut().insert(props.id.clone(), props);
-                    tray_changed = true;
-                }
-                TrayEvent::ItemUpdated(id) => {
-                    log::debug!("Tray item updated signal: {}:{}", id.bus_name, id.object_path);
-                    // The watcher will send ItemPropsLoaded after re-reading
                     tray_changed = true;
                 }
             }
@@ -328,9 +325,6 @@ fn on_activate(app: &gtk4::Application) {
                 NotifyEvent::Close(id) => {
                     popup_mgr.dismiss(id);
                     let _ = close_signal_tx.send(id);
-                }
-                NotifyEvent::ActionInvoked(_, _) => {
-                    // Actions flow directly via action_tx, not through this channel
                 }
             }
         }
@@ -445,15 +439,15 @@ fn listen_events(tx: &mpsc::Sender<I3Event>) -> Result<(), Box<dyn std::error::E
                 "empty" => {
                     let output = payload["current"]["output"].as_str().unwrap_or("").to_string();
                     let num = payload["current"]["num"].as_i64().unwrap_or(0);
-                    log::info!("Workspace empty event: ws {} on output {}", num, output);
+                    log::debug!("Workspace empty event: ws {} on output {}", num, output);
                     // Auto-focus immediately — no debounce delay
                     if let Err(e) = sequencer::focus_next_on_output(&output, num) {
                         log::error!("Auto-focus error: {}", e);
                     }
-                    I3Event::WorkspaceEmpty { output, num }
+                    I3Event::WorkspaceEmpty
                 }
                 "init" => {
-                    log::info!("Workspace structural event: init");
+                    log::debug!("Workspace structural event: init");
                     I3Event::WorkspaceStructural
                 }
                 "rename" => {
@@ -481,23 +475,23 @@ fn refresh_state(
     container_ref: &Rc<RefCell<gtk4::Box>>,
     layout_indicator: &Rc<layout_indicator::LayoutIndicator>,
 ) {
-    // Query fresh state from i3 (in a way that doesn't block too long)
-    let fresh = match query_initial_state() {
-        Ok((ws, tree, output_order)) => {
-            layout_indicator.update_from_tree(&tree);
-            if let Some(cmd) = auto_unmax::revert_command(&tree) {
-                log::info!("auto-unmax: {}", cmd);
-                if let Ok(mut conn) = ipc::I3Connection::connect() {
-                    let _ = conn.run_command(&cmd);
-                }
-            }
-            model::build_workspace_state(&ws, &tree, &output_order)
-        }
+    let (ws_json, tree_json, output_order) = match query_initial_state() {
+        Ok(v) => v,
         Err(e) => {
             log::error!("Failed to refresh i3 state: {}", e);
             return;
         }
     };
+    // ONE tree walk produces every downstream consumer's input.
+    let snapshot = model::build_tree_snapshot(&ws_json, &tree_json, &output_order);
+    layout_indicator.apply_layout(snapshot.focused_parent_layout);
+    if let Some(cmd) = snapshot.auto_unmax_cmd {
+        log::debug!("auto-unmax: {}", cmd);
+        if let Ok(mut conn) = ipc::I3Connection::connect() {
+            let _ = conn.run_command(&cmd);
+        }
+    }
+    let fresh = snapshot.workspaces;
 
     // Resolve any new icon classes
     let new_classes: Vec<String> = fresh
