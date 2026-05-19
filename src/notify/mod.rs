@@ -5,6 +5,7 @@ pub mod popup;
 pub mod history;
 pub mod panel;
 pub mod render;
+pub mod dnd;
 mod daemon;
 
 pub use daemon::start_notification_daemon;

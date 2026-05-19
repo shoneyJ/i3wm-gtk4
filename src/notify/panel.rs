@@ -12,6 +12,7 @@ use gtk4::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::dnd::DndController;
 use super::history::NotificationHistory;
 use super::render;
 
@@ -31,6 +32,7 @@ impl NotificationPanel {
     pub fn new(
         app: &gtk4::Application,
         history: Rc<RefCell<NotificationHistory>>,
+        dnd: Rc<DndController>,
     ) -> Self {
         let display = gdk::Display::default().expect("Could not get display");
         let monitors = display.monitors();
@@ -65,8 +67,19 @@ impl NotificationPanel {
         title_label.set_hexpand(true);
         header.append(&title_label);
 
+        // DND toggle (label set by DndController::update_ui)
+        let dnd_btn = gtk4::Button::new();
+        dnd_btn.add_css_class("notification-panel-dnd");
+        let dnd_for_click = dnd.clone();
+        dnd_btn.connect_clicked(move |_| {
+            dnd_for_click.toggle();
+        });
+        header.append(&dnd_btn);
+        dnd.register_panel_toggle(dnd_btn);
+
         let clear_btn = gtk4::Button::with_label("Clear All");
         clear_btn.add_css_class("notification-panel-clear");
+        clear_btn.set_margin_start(6);
         header.append(&clear_btn);
 
         // Scrollable content area

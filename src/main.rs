@@ -147,7 +147,16 @@ fn on_activate(app: &gtk4::Application) {
     let (action_tx, close_signal_tx) = notify::start_notification_daemon(notify_tx);
 
     i3more::css::load_css("notification.css", include_str!("../assets/notification.css"));
-    let popup_manager = Rc::new(notify::popup::PopupManager::new(app, notify_close_tx, action_tx));
+
+    // DND controller — owns the shared flag and updates bell glyph on change.
+    let dnd_ctrl = notify::dnd::DndController::new(notify_handles.bell_label.clone());
+
+    let popup_manager = Rc::new(notify::popup::PopupManager::new(
+        app,
+        notify_close_tx,
+        action_tx,
+        dnd_ctrl.flag(),
+    ));
 
     // Notification history and panel
     let notify_history: Rc<RefCell<notify::history::NotificationHistory>> =
@@ -155,6 +164,7 @@ fn on_activate(app: &gtk4::Application) {
     let notify_panel = Rc::new(notify::panel::NotificationPanel::new(
         app,
         notify_history.clone(),
+        dnd_ctrl.clone(),
     ));
 
     // Control panel
@@ -176,6 +186,15 @@ fn on_activate(app: &gtk4::Application) {
         }
     });
     notify_handles.bell_overlay.add_controller(bell_gesture);
+
+    // Bell right-click handler — toggle Do Not Disturb.
+    let dnd_for_right_click = dnd_ctrl.clone();
+    let bell_gesture_right = gtk4::GestureClick::new();
+    bell_gesture_right.set_button(3); // GDK_BUTTON_SECONDARY (right mouse button)
+    bell_gesture_right.connect_released(move |_, _, _, _| {
+        dnd_for_right_click.toggle();
+    });
+    notify_handles.bell_overlay.add_controller(bell_gesture_right);
 
     // Control panel icon click handler — toggle control panel (hide notification panel first)
     let cp_for_click = control_panel.clone();
